@@ -1,13 +1,20 @@
 """KleenTrainer entry point.
 
-  python main.py live [config.toml]      watch the client with the debug overlay
+  python main.py live                    watch the client with the debug overlay
   python main.py replay FOLDER           step through saved frames
+  python main.py walk X                  walk to minimap x X (presses keys)
+  python main.py safe                    go to the closest safe spot (presses keys)
 
-Live: hotkeys (config) work while the game is in front: save a frame as a
-PNG to the run folder, mark the safe spot at the character's minimap
-position, or stop (kill hotkey). Pauses while the client is not in front.
-Ctrl+C in the terminal also stops it (or q in the separate overlay window,
-if that one is used). Each run writes run.log in its run folder.
+Each command can take a config file as its last argument (default
+config.toml). walk and safe press game keys: run them from an administrator
+terminal.
+
+Hotkeys (config) work while the game is in front: save a frame as a PNG to
+the run folder, add or remove a safe spot at the character's minimap
+position, or stop (kill hotkey; also releases all keys). Watching pauses
+while the client is not in front. Ctrl+C in the terminal also stops (or q in
+the separate overlay window, if that one is used). Each run writes run.log
+in its run folder.
 Replay: in the overlay, n or space = next, p = previous, q = quit.
 """
 
@@ -22,8 +29,10 @@ from pathlib import Path
 from pynput import keyboard
 
 import capture
+import keys
 import minimap
 import mobs
+import movement
 import overlay
 import player
 import points
@@ -143,113 +152,233 @@ class Detectors:
         self.was_dead = dead
         return lines, rects, points
 
-    def status_line(self):
+    def status_line(self, input_on=False):
         dot = self.reading.dot if self.reading else None
         where = f"minimap {dot}" if dot else "minimap position unknown"
-        return f"Status: {where}, {bar_text('HP', self.hp)}, {bar_text('MP', self.mp)}, state watching"
+        state = "moving" if input_on else "watching"
+        return f"Status: {where}, {bar_text('HP', self.hp)}, {bar_text('MP', self.mp)}, state {state}"
+
+
+class Stopped(Exception):
+    """The run must stop; the message is the reason."""
+
+
+class Session:
+    """Everything a run needs: the client window, capture, detectors,
+    overlay, hotkeys, run log and (when input is on) game keys.
+
+    tick() is one step of the loop: grab a frame, run the detectors, act on
+    hotkeys, update the overlay, and raise Stopped when the run must end.
+    Watching (input off): pauses while the client is not in front, and only
+    shows an unexpected screen or death. With input on: focus loss is
+    handled (screenshot, release keys, refocus; 3 in a row stops), and an
+    unexpected screen or death stops the run.
+    """
+
+    def __init__(self, config, input_on):
+        self.config = config
+        self.input_on = input_on
+        window.make_dpi_aware()
+        self.hwnd = window.find_window(config["window_title"])
+        if not self.hwnd:
+            sys.exit(f'No window titled "{config["window_title"]}". Is the client running?')
+        if not window.bring_to_front(self.hwnd, config["focus_settle_s"]):
+            sys.exit("Windows did not let the client come to the front. "
+                     "Click the client and run again.")
+
+        self.run_dir = Path("runs") / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.run_dir.mkdir(parents=True)
+        self.log = runlog.RunLog(self.run_dir, config["log"]["status_interval_s"])
+        self.log.event(f"Run start ({'input on' if input_on else 'watching'}). "
+                       f"Config: {json.dumps(config)}")
+
+        # Hotkeys are heard by a background listener; tick() acts on them.
+        hotkeys = config["hotkeys"]
+        self.requests = {name: threading.Event()
+                         for name in ("save_frame", "mark_safe_spot", "remove_safe_spot", "kill")}
+        by_key = {parse_key(hotkeys[name]): name for name in self.requests}
+
+        def on_press(key):
+            if key in by_key:
+                self.requests[by_key[key]].set()
+
+        self.listener = keyboard.Listener(on_press=on_press)
+        self.listener.start()
+
+        self.map_name = config["map_name"]
+        self.capturer = capture.Capturer(self.hwnd)
+        self.detectors = Detectors(config, self.log.event, points.safe_spots(self.map_name))
+        self.keys = keys.Keys(self.hwnd, config["keys"]) if input_on else None
+        if config["overlay"] == "game":
+            self.view = overlay.GameOverlay(self.hwnd)
+        else:
+            self.view = overlay.Overlay(config["overlay_scale"])
+        # Opening the overlay window can take focus from the client.
+        window.bring_to_front(self.hwnd, config["focus_settle_s"])
+
+        self.interval = 1 / config["capture_fps"]
+        self.frame = None
+        self.saved = 0
+        self.focus_losses = 0
+        self.last_focus_loss = 0.0
+        self.reopen_tried = False
+        self.started = time.perf_counter()
+        print(f"Run folder: {self.run_dir}")
+        print(f"Press {hotkeys['kill']} (kill hotkey) or Ctrl+C here to stop.")
+
+    def tick(self):
+        """One loop step; returns the latest minimap reading (or None)."""
+        if self.requests["kill"].is_set():
+            raise Stopped("kill hotkey")
+        if not window.find_window(self.config["window_title"]):
+            raise Stopped("client window closed")
+
+        mode = "INPUT ON" if self.input_on else "LIVE"
+        if not window.is_foreground(self.hwnd):
+            if self.input_on:
+                self._focus_lost()
+            else:
+                mode = "PAUSED: client not in front"
+
+        lines, rects, pts = [], [], []
+        if window.is_foreground(self.hwnd):
+            self.frame = self.capturer.grab()
+            lines, rects, pts = self.detectors.run(self.frame)
+            self._hotkeys()
+            if self.input_on:
+                self._stop_conditions()
+        for name in ("save_frame", "mark_safe_spot", "remove_safe_spot"):
+            self.requests[name].clear()
+
+        if self.log.status_due():
+            self.log.event(self.detectors.status_line(self.input_on))
+        if self.frame is not None:
+            h, w = self.frame.shape[:2]
+            self.view.show(self.frame, [mode, f"client {w}x{h}"] + lines, rects, pts)
+
+        wait = max(1, int((self.interval - (time.perf_counter() - self.started)) * 1000))
+        if self.view.key(wait) == ord("q") or self.view.is_closed():
+            raise Stopped("overlay closed")
+        self.started = time.perf_counter()
+        return self.detectors.reading
+
+    def _hotkeys(self):
+        if self.requests["save_frame"].is_set():
+            print(f"Saved {capture.save_frame(self.frame, self.run_dir / 'frames')}")
+            self.saved += 1
+        if self.requests["mark_safe_spot"].is_set():
+            mark_safe_spot(self.detectors, self.map_name,
+                           self.config["points"]["merge_distance"], self.log)
+        if self.requests["remove_safe_spot"].is_set():
+            remove_safe_spot(self.detectors, self.map_name, self.log)
+
+    def _stop_conditions(self):
+        d = self.detectors
+        if d.was_dead:
+            raise Stopped("death")
+        reason = d.last_unexpected
+        if reason is None:
+            if d.reading and d.reading.state == "normal":
+                self.reopen_tried = False
+            return
+        if reason.startswith("minimap") and "size" not in reason and not self.reopen_tried:
+            # Minimap missing for 3 s: release keys, press M once, and allow
+            # another 3 s before stopping.
+            self.reopen_tried = True
+            self.keys.release_all()
+            self.log.event(f"{reason}: pressing M once.")
+            self.keys.tap("minimap")
+            d.unexpected.missing_since = time.monotonic()
+            d.last_unexpected = None
+            return
+        raise Stopped(f"unexpected screen: {reason}")
+
+    def _focus_lost(self):
+        """Screenshot of the whole screen (shows what took focus), release
+        all keys, log, bring the client back. 3 in a row stops the run."""
+        self.keys.release_all()
+        now = time.monotonic()
+        if now - self.last_focus_loss > 60:
+            self.focus_losses = 0
+        self.focus_losses += 1
+        self.last_focus_loss = now
+        shot = capture.save_full_screen(self.run_dir / f"focus_lost_{self.focus_losses}.png")
+        self.log.event(f"Focus lost ({self.focus_losses} in a row); keys released; "
+                       f"screenshot {shot.name}.")
+        if self.focus_losses >= self.config["focus"]["max_losses_in_a_row"]:
+            raise Stopped(f"focus lost {self.focus_losses} times in a row")
+        if not window.bring_to_front(self.hwnd, self.config["focus_settle_s"]):
+            raise Stopped("Windows refused to bring the client back to the front")
+        self.log.event("Client back in front; continuing.")
+
+    def close(self, reason):
+        if self.keys:
+            self.keys.release_all()
+        self.listener.stop()
+        self.capturer.close()
+        self.view.close()
+        self.log.event(f"Stop: {reason}.")
+        d = self.detectors
+        self.log.event(f"Summary: duration {self.log.duration()}, deaths seen {d.deaths}, "
+                       f"unexpected screens {d.unexpected_screens}, "
+                       f"focus losses {self.focus_losses}, frames saved {self.saved}.")
+        self.log.close()
+
+
+def run_session(config, input_on, task):
+    """Run task(session) until it finishes or the run is stopped; always
+    release keys and log the stop."""
+    session = Session(config, input_on)
+    reason = "finished"
+    try:
+        task(session)
+    except Stopped as e:
+        reason = str(e)
+    except movement.MoveFailed as e:
+        reason = f"move failed: {e}"
+    except keys.NotInFront:
+        reason = "client not in front when a key was due"
+    except KeyboardInterrupt:
+        reason = "Ctrl+C"
+    finally:
+        session.close(reason)
 
 
 def live(config):
-    window.make_dpi_aware()
-    hwnd = window.find_window(config["window_title"])
-    if not hwnd:
-        sys.exit(f'No window titled "{config["window_title"]}". Is the client running?')
-    if not window.bring_to_front(hwnd, config["focus_settle_s"]):
-        sys.exit("Windows did not let the client come to the front. "
-                 "Click the client and run again.")
-
-    run_dir = Path("runs") / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir.mkdir(parents=True)
-    frames_dir = run_dir / "frames"
-    log = runlog.RunLog(run_dir, config["log"]["status_interval_s"])
-    log.event(f"Run start. Config: {json.dumps(config)}")
-
-    # Hotkeys are heard by a background listener; the main loop acts on them.
-    hotkeys = config["hotkeys"]
-    requests = {name: threading.Event()
-                for name in ("save_frame", "mark_safe_spot", "remove_safe_spot", "kill")}
-    keys = {parse_key(hotkeys[name]): name for name in requests}
-
-    def on_press(key):
-        if key in keys:
-            requests[keys[key]].set()
-
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
-
-    map_name = config["map_name"]
-    capturer = capture.Capturer(hwnd)
-    detectors = Detectors(config, log.event, points.safe_spots(map_name))
-    # Stages 1 to 6 send no input, so the bot cannot open the minimap itself.
-    state = detectors.minimap.read(capturer.grab()).state
-    if state != "normal":
-        capturer.close()
-        listener.stop()
-        log.event(f"Stop: the minimap is {state} at startup.")
-        log.close()
-        sys.exit(f"The minimap is {state}. Open it at normal size "
-                 "(not large, not closed) and run again.")
-
-    if config["overlay"] == "game":
-        view = overlay.GameOverlay(hwnd)
-    else:
-        view = overlay.Overlay(config["overlay_scale"])
-    # Opening the overlay window can take focus from the client.
-    window.bring_to_front(hwnd, config["focus_settle_s"])
-    interval = 1 / config["capture_fps"]
-    frame = None
-    saved = 0
-    stop_reason = "overlay closed"
-    print(f"Run folder: {run_dir}")
-    print(f"Watching. Press {hotkeys['kill']} (kill hotkey) or Ctrl+C here to stop.")
-
-    try:
+    """Watch only: the user plays."""
+    def watch(session):
+        # Stages 1 to 6 send no input, so the bot cannot open the minimap.
+        reading = session.tick()
+        state = reading.state if reading else "not visible"
+        if state != "normal":
+            print(f"The minimap is {state}. Open it at normal size "
+                  "(not large, not closed) and run again.")
+            raise Stopped(f"minimap {state} at startup")
         while True:
-            started = time.perf_counter()
-            if requests["kill"].is_set():
-                stop_reason = "kill hotkey"
-                break
-            if not window.find_window(config["window_title"]):
-                stop_reason = "client window closed"
-                break
+            session.tick()
+    run_session(config, False, watch)
 
-            if window.is_foreground(hwnd):
-                frame = capturer.grab()
-                lines, rects, pts = detectors.run(frame)
-                mode = "LIVE"
-                if requests["save_frame"].is_set():
-                    print(f"Saved {capture.save_frame(frame, frames_dir)}")
-                    saved += 1
-                if requests["mark_safe_spot"].is_set():
-                    mark_safe_spot(detectors, map_name, config["points"]["merge_distance"], log)
-                if requests["remove_safe_spot"].is_set():
-                    remove_safe_spot(detectors, map_name, log)
-            else:
-                mode = "PAUSED: client not in front"
-            for name in ("save_frame", "mark_safe_spot", "remove_safe_spot"):
-                requests[name].clear()
 
-            if log.status_due():
-                log.event(detectors.status_line())
+def walk(config, x):
+    """Input on: open the minimap if needed, then walk to minimap x."""
+    def task(session):
+        mover = movement.Mover(session, config)
+        mover.ensure_minimap()
+        mover.walk_to(x)
+        session.log.event(f"Arrived at minimap {mover.settle()}.")
+    run_session(config, True, task)
 
-            if frame is not None:
-                h, w = frame.shape[:2]
-                view.show(frame, [mode, f"client {w}x{h}"] + lines, rects, pts)
 
-            wait = max(1, int((interval - (time.perf_counter() - started)) * 1000))
-            if view.key(wait) == ord("q") or view.is_closed():
-                break
-    except KeyboardInterrupt:
-        stop_reason = "Ctrl+C"
-    finally:
-        # From stage 7 the kill hotkey also releases all keys here.
-        listener.stop()
-        capturer.close()
-        view.close()
-        log.event(f"Stop: {stop_reason}.")
-        log.event(f"Summary: duration {log.duration()}, deaths seen {detectors.deaths}, "
-                  f"unexpected screens {detectors.unexpected_screens}, frames saved {saved}.")
-        log.close()
+def go_safe(config):
+    """Input on: open the minimap if needed, then go to the closest safe spot
+    (searching for a route the first time)."""
+    def task(session):
+        mover = movement.Mover(session, config)
+        mover.ensure_minimap()
+        index = mover.closest_safe_spot(session.map_name)
+        mover.goto_safe_spot(session.map_name, index)
+        session.detectors.safe_spots = points.safe_spots(session.map_name)
+    run_session(config, True, task)
 
 
 def current_dot(detectors):
@@ -298,9 +427,9 @@ def replay(config, folder):
             if shown != i:
                 # Detect once per frame shown, not on every redraw.
                 path, frame = frames[i]
-                lines, rects, points = detectors.run(frame)
+                lines, rects, pts = detectors.run(frame)
                 view.show(frame, [f"REPLAY {i + 1}/{len(frames)}", path.name] + lines,
-                          rects, points)
+                          rects, pts)
                 shown = i
             key = view.key(50)
             if key in (ord("n"), ord(" ")):
@@ -315,14 +444,21 @@ def replay(config, folder):
 
 def main():
     args = sys.argv[1:]
-    if not args or args[0] not in ("live", "replay"):
+    # Commands and how many arguments they take before the optional config.
+    commands = {"live": 0, "replay": 1, "walk": 1, "safe": 0}
+    if not args or args[0] not in commands or len(args) < 1 + commands[args[0]]:
         sys.exit(__doc__)
-    if args[0] == "live":
-        live(load_config(args[1] if len(args) > 1 else "config.toml"))
+    command, rest = args[0], args[1:]
+    n = commands[command]
+    config = load_config(rest[n] if len(rest) > n else "config.toml")
+    if command == "live":
+        live(config)
+    elif command == "replay":
+        replay(config, rest[0])
+    elif command == "walk":
+        walk(config, int(rest[0]))
     else:
-        if len(args) < 2:
-            sys.exit("Usage: python main.py replay FOLDER [config.toml]")
-        replay(load_config(args[2] if len(args) > 2 else "config.toml"), args[1])
+        go_safe(config)
 
 
 if __name__ == "__main__":

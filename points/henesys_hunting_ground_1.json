@@ -1,6 +1,17 @@
 {
-  "safe_spot": [
-    40,
-    128
+  "safe_spots": [
+    {
+      "spot": [
+        42,
+        128
+      ],
+      "route": [
+        {
+          "takeoff_x": 42,
+          "direction": null,
+          "lands_y": 128
+        }
+      ]
+    }
   ]
 }

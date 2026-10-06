@@ -47,6 +47,16 @@ def save_frame(frame, folder):
     return path
 
 
+def save_full_screen(path):
+    """Screenshot of all monitors (e.g. to show what took focus). Returns
+    the path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with mss.MSS() as sct:
+        shot = sct.grab(sct.monitors[0])
+    cv2.imwrite(str(path), np.array(shot)[:, :, :3])
+    return path
+
+
 def load_frames(folder):
     """All PNGs in folder, sorted by name, as (path, frame) pairs."""
     return [(p, cv2.imread(str(p))) for p in sorted(Path(folder).glob("*.png"))]

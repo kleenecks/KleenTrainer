@@ -87,15 +87,23 @@ All numbers are starting values and live in the config.
   to the closest spot by walking distance: horizontal minimap distance to the
   spot's takeoff point (or the spot itself before a route is known).
   Pre-mapped maps come later.
-- Getting onto a platform spot: no marking; the bot searches. Walk to the
-  spot's x, try a jump straight up, then jumps toward the spot from takeoff
-  spots further out to each side (2 minimap px apart). After each landing
-  check the minimap height: at the spot's height = done; partway up (a
-  multi-jump route) = keep searching from there; back on the floor = next
-  takeoff spot. Give up after 20 tries (config): log and stop. The route that
-  worked (each takeoff x and jump direction) is saved with the spot in the
-  points file and reused; the search only runs again if it stops working.
-  Moving a spot clears its route.
+- Getting onto a platform spot: no marking; the bot searches (movement.py).
+  Takeoff spots are tried nearest first, 2 minimap px apart, up to 30 px to
+  each side: on the starting level around the spot's x, on a level partway up
+  around where the character landed. At each takeoff spot: a jump straight
+  up first (platforms can be jumped up through from below), then a jump
+  toward the spot. After each landing check the minimap height: at the
+  spot's height = done; higher = keep searching from that level; lower =
+  fell, search again from there. Walking off a level's edge is remembered,
+  so later tries on that level stay inside it. Give up after 60 tries
+  (config): log and stop. The route that worked (each takeoff x, jump
+  direction and landing height) is saved with the spot in the points file and
+  replayed next time; the search only runs again if the replay does not land
+  where expected. Moving a spot clears its route.
+- Walking: hold the arrow key toward the target x, pulse it within 4 minimap
+  px to avoid overshooting, stop within 1 px. No progress for 3 s = the walk
+  fails. A jump has landed when the minimap height has not changed for 3
+  readings, at least 0.3 s after the jump.
 - Loot: tap the loot key during attacks and sweeps. After a kill, walk to the
   mob's last detected position while tapping loot, then pick the next target.
   Skip that walk when HP is low.
@@ -205,7 +213,9 @@ All numbers are starting values and live in the config.
   pull focus; the bring-to-front rule applies to saved screenshots.
 
 ## Config and files
-- Entry point: python main.py live | replay FOLDER
+- Entry point: python main.py live | replay FOLDER | walk X | safe. walk and
+  safe press game keys (stage 7 tests): walk to minimap x X, or go to the
+  closest safe spot.
 - Settings in config.toml: window title, keybinds stored by action name (attack, skill,
   loot, chair, jump, minimap), thresholds, intervals. Hand-edited now. A GUI will edit
   the same file later.

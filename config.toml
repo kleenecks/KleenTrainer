@@ -70,6 +70,35 @@ rough_max_rms = 45
 [keys]
 # Game keybinds by action, as pydirectinput key names.
 jump = "alt"
+left = "left"
+right = "right"
+minimap = "m"
+
+[movement]
+# All distances in minimap px.
+# Walking stops within this distance of the target x.
+arrive_tolerance = 1
+# Within this distance the arrow key is pulsed instead of held, to avoid
+# overshooting; each pulse holds it this long (s).
+slow_zone = 4
+pulse_s = 0.08
+# Walking fails if the distance has not shrunk for this long (s).
+no_progress_s = 3
+# Two heights within this distance count as the same level.
+level_tolerance = 1
+# Longest wait for a jump to land (s).
+jump_timeout_s = 2.0
+# Platform search: takeoff spots this far apart, up to this far to each
+# side of the safe spot, and at most this many jumps. Straight-up jumps at
+# every takeoff spot come first, then jumps toward the spot.
+search_step = 2
+search_max_offset = 30
+search_max_tries = 60
+
+[focus]
+# Focus losses in a row (without a full minute between them) that stop the
+# run instead of refocusing.
+max_losses_in_a_row = 3
 
 [hotkeys]
 # Saves the current frame as a PNG in the run folder.
