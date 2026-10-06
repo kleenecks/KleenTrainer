@@ -19,6 +19,7 @@ from pathlib import Path
 from pynput import keyboard
 
 import capture
+import minimap
 import overlay
 import window
 
@@ -31,6 +32,18 @@ def load_config(path):
 def parse_key(name):
     """'f10' -> Key.f10, 'x' -> KeyCode for x."""
     return getattr(keyboard.Key, name, None) or keyboard.KeyCode.from_char(name)
+
+
+def minimap_view(reading):
+    """Overlay text, boxes and points for a minimap reading."""
+    if reading.state != "normal":
+        return [f"minimap: {reading.state}"], [], []
+    b = reading.bounds
+    if reading.dot is None:
+        return [f"minimap: normal {b.width}x{b.height}, no dot"], [b], []
+    dx, dy = reading.dot
+    return ([f"minimap: normal {b.width}x{b.height}, dot ({dx}, {dy})"],
+            [b], [(b.x + dx, b.y + dy)])
 
 
 def live(config):
@@ -57,6 +70,15 @@ def live(config):
     listener.start()
 
     capturer = capture.Capturer(hwnd)
+    reader = minimap.MinimapReader(config["minimap"])
+    # Stages 1 to 6 send no input, so the bot cannot open the minimap itself.
+    state = reader.read(capturer.grab()).state
+    if state != "normal":
+        capturer.close()
+        listener.stop()
+        sys.exit(f"The minimap is {state}. Open it at normal size "
+                 "(not large, not closed) and run again.")
+
     view = overlay.Overlay(config["overlay_scale"])
     interval = 1 / config["capture_fps"]
     frame = None
@@ -72,6 +94,7 @@ def live(config):
 
             if window.is_foreground(hwnd):
                 frame = capturer.grab()
+                lines, rects, points = minimap_view(reader.read(frame))
                 status = "LIVE"
                 if save_requested.is_set():
                     print(f"Saved {capture.save_frame(frame, frames_dir)}")
@@ -81,7 +104,7 @@ def live(config):
 
             if frame is not None:
                 h, w = frame.shape[:2]
-                view.show(frame, [status, f"client {w}x{h}"])
+                view.show(frame, [status, f"client {w}x{h}"] + lines, rects, points)
 
             wait = max(1, int((interval - (time.perf_counter() - started)) * 1000))
             if view.key(wait) == ord("q") or view.is_closed():
@@ -97,12 +120,15 @@ def replay(config, folder):
     if not frames:
         sys.exit(f"No PNG files in {folder}")
 
+    reader = minimap.MinimapReader(config["minimap"])
     view = overlay.Overlay(config["overlay_scale"])
     i = 0
     try:
         while True:
             path, frame = frames[i]
-            view.show(frame, [f"REPLAY {i + 1}/{len(frames)}", path.name])
+            lines, rects, points = minimap_view(reader.read(frame))
+            view.show(frame, [f"REPLAY {i + 1}/{len(frames)}", path.name] + lines,
+                      rects, points)
             key = view.key(50)
             if key in (ord("n"), ord(" ")):
                 i = min(i + 1, len(frames) - 1)

@@ -15,10 +15,21 @@ class Overlay:
         self.scale = scale
         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
 
-    def show(self, frame, lines):
-        """Show frame scaled down, with each string in lines as status text."""
+    def show(self, frame, lines, rects=(), points=()):
+        """Show frame scaled down, with each string in lines as status text.
+
+        rects are Regions and points are (x, y), both in frame pixels; each
+        is drawn in green.
+        """
         image = cv2.resize(frame, None, fx=self.scale, fy=self.scale,
                            interpolation=cv2.INTER_AREA)
+        s = self.scale
+        for r in rects:
+            cv2.rectangle(image, (int(r.x * s), int(r.y * s)),
+                          (int((r.x + r.width) * s), int((r.y + r.height) * s)),
+                          (0, 255, 0), 1)
+        for x, y in points:
+            cv2.circle(image, (int(x * s), int(y * s)), 5, (0, 255, 0), 1)
         for i, text in enumerate(lines):
             y = 24 + i * 24
             cv2.putText(image, text, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6,

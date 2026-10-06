@@ -21,6 +21,9 @@ with the server admins.
 - Game client runs windowed at a fixed resolution. Test server window title:
   "Kaizen v92"
 - Run from the command line with a config file. No GUI in v1.
+- The test server client runs as administrator, so the bot must too: Windows
+  hides an elevated window's keypresses from (and blocks input to it from)
+  non-elevated programs. Run from an administrator terminal.
 
 ## v1 scope
 One map: Henesys Hunting Ground I. Flat ground plus platforms used as safe
@@ -41,8 +44,7 @@ Observe only (the user plays, the bot only watches):
    No input.
 1. Capture base: regions relative to the client window, save and replay
    frames, debug overlay
-2. Minimap reader: minimap state (expanded, collapsed, closed), bounds,
-   player dot
+2. Minimap reader: minimap state (normal, large, closed), bounds, player dot
 3. Player on-screen position
 4. Status reader: HP bar, MP bar, death, unexpected screen
 5. Mob detection: animation frames, both facings, reachable filter
@@ -91,8 +93,9 @@ All numbers are starting values and live in the config.
   lost too many times in a row. Every client screenshot brings the client to
   the front first; the focus-lost full-screen screenshot is taken before
   refocusing, so it shows what took focus.
-- Minimap: only the expanded state counts as open; collapsed or closed does
-  not. At startup, if not open, press the minimap key and check again; stop
+- Minimap: only the normal-size expanded state counts as open. Large (the +
+  button) and closed do not. In this client, closed leaves a bar with the map
+  name and the - (greyed), + and WORLD buttons; it never disappears fully. At startup, if not open, press the minimap key and check again; stop
   if it is still not open. In stages 1 to 6 (no input), refuse to start with
   a console message asking the user to open it. During a run, if the minimap
   is not found for 3 s, release keys, press the minimap key once, and stop
@@ -105,10 +108,15 @@ All numbers are starting values and live in the config.
 ## Detection approach
 - All screen regions are relative to the client window, never absolute screen
   coordinates.
-- Minimap: locate it by template-matching its corners, then template-match the
-  player dot inside it. Store position relative to the minimap. (Method
+- Minimap: the - / + / WORLD button group gives the state (normal: both blue;
+  large: + greyed; closed: - greyed). In the normal state, template-match the
+  inner corners of the minimap frame to get the map area, then template-match
+  the player dot inside it. Store position relative to the map area. (Method
   borrowed from the open-source Auto Maple bot. Its images target a different
-  game version, so only the method transfers.)
+  game version, so only the method transfers.) Templates are in
+  templates/minimap/, cut from test-server frames.
+- Each read searches near the last found position first; a full-frame search
+  (about 1 s) runs only when that fails, e.g. on a state change.
 - Player on-screen position is separate from minimap position. The camera lags
   and clamps at map edges, so the character is not always at screen center.
 - Mob templates come from the game's WZ files. Account for multiple animation
@@ -116,7 +124,7 @@ All numbers are starting values and live in the config.
 - Stages 1 to 6 are validated with the user playing. The debug overlay shows
   detections and, from stage 5, what the bot would do.
 - Frames can be saved and replayed so detection is testable without the game.
-  The save-frame hotkey (F10) writes a PNG to the run folder's frames/
+  The save-frame hotkey (Delete) writes a PNG to the run folder's frames/
   subfolder. Replay loads a folder of PNGs.
 - Debug overlay: a separate OpenCV window showing a scaled copy of the frame,
   placed by the user beside the client (anything over the client gets
@@ -145,7 +153,7 @@ All numbers are starting values and live in the config.
 ## Open items (ask, do not guess)
 - Which skill; keybinds for attack, skill, loot, chair, jump, minimap; attack
   range and facing
-- What the minimap key does when the minimap is collapsed (expand it, or
+- What the minimap key does when the minimap is large (switch to normal, or
   close it so a second press is needed); check in-game before stage 7
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
@@ -162,7 +170,8 @@ All numbers are starting values and live in the config.
 - Overnight PC settings: sleep, lock, updates, display scaling
 - WZ extraction tool
 - From the admins: run report contents, whether the client blocks synthetic
-  input, whether the client runs as administrator
+  input, whether the real server's client runs as administrator (the test
+  server's does)
 
 ## After v1
 Map recorder with shareable map files in the project folders, rope climbing,

@@ -10,8 +10,16 @@ focus_settle_s = 0.5
 capture_fps = 10
 
 # Debug overlay size relative to the client (0.5 = half size).
-overlay_scale = 0.3
+overlay_scale = 0.4
+
+[minimap]
+# Lowest match score (0 to 1) for the - / + / WORLD buttons to count as found.
+button_min_score = 0.9
+# Highest color difference for the minimap frame corners to count as found.
+corner_max_rms = 8.0
+# Lowest match score (0 to 1) for the yellow player dot to count as found.
+dot_min_score = 0.7
 
 [hotkeys]
 # Saves the current frame as a PNG in the run folder.
-save_frame = "f10"
+save_frame = "delete"
