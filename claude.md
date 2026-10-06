@@ -104,9 +104,33 @@ All numbers are starting values and live in the config.
   px to avoid overshooting, stop within 1 px. No progress for 3 s = the walk
   fails. A jump has landed when the minimap height has not changed for 3
   readings, at least 0.3 s after the jump.
-- Loot: tap the loot key during attacks and sweeps. After a kill, walk to the
-  mob's last detected position while tapping loot, then pick the next target.
-  Skip that walk when HP is low.
+- Loot is secondary to fighting and never stops the character. The loot key
+  (Z) is held whenever the character walks (to a target, sweeping, on a loot
+  pass) and is never tapped; it is not pressed while attacking. Windows does
+  not auto-repeat keys held by a program, and picking up reacts to each
+  key-down, so while Z is held its key-down is re-sent every loop step
+  (about 10 times a second) without releasing it. After a
+  kill: a loot pass, walking with Z held the way the character faced while
+  attacking (the drops are in front of it; a mob dying on top of the
+  character gives no reliable side), through the spot where the mob died
+  (0 if it was behind or on top) and 40 screen px (config; 60 went too far)
+  past it, then straight on to the next target, without stopping. Each pass
+  is logged. Skipped when HP is below 25%. A kill
+  = a target that disappears while the bot was attacking it. Its screen
+  position is turned into a minimap x with 16.2 screen px per minimap px (config [map]; from the map data: minimap area 2317 game px wide shown
+  as 214 minimap px, times the 1.5x stretch).
+- Sweep wall time: the minimap x unchanged for 1 s while sweeping = a wall.
+- Edge margins: the bot stays 20 minimap px (config) away from each side of
+  the minimap's map area, since the character gets lost at the very edges.
+  Sweeping turns around there, mobs beyond it are not targeted, and loot
+  passes stop there.
+- The training loop is trainer.py; python main.py train runs it (fight, loot,
+  sweep; resting comes in stage 10).
+- Map data from maplestory.io (GMS v92, map 104040000) lists the map's mob
+  spawns, platforms (footholds) and ropes. Bottom floor (spawn height 215):
+  Shroom and Blue Snail only. Higher levels: Red Snail, Pig, Blue Snail,
+  Shroom. No Orange Mushroom on this map (the orange-capped mobs are
+  Shrooms). Useful for automatic map setup later.
 - Rest: below 25% HP, jump up to a safe platform, sit on a chair, get up when
   HP is full. On the way, jump over mobs in the path and fight nothing. If a
   jump fails, keep going.
@@ -191,9 +215,10 @@ All numbers are starting values and live in the config.
   maplestory.io (GMS v92) by fetch_mobs.py into templates/mobs/<name>/ as
   <animation>_<frame>.png, facing left. Account for multiple animation
   frames, transparency, and both facings. Mobs on the v1 map's bottom floor,
-  where v1 fights ([mobs] in config): Blue Snail, Shroom. Red Snail and
-  Orange Mushroom spawn elsewhere on the map; their sprites are downloaded
-  but not detected.
+  where v1 fights ([mobs] in config): Blue Snail, Shroom. Red Snail and Pig
+  spawn higher up on the map. Red Snail and Orange Mushroom sprites are
+  downloaded but not detected (Orange Mushroom turned out not to be on this
+  map).
 - Mob detection (mobs.py): only the rows where a mob's feet would be within
   10 px (config) of the character's feet are searched, which is the
   reachable filter. Each sprite is scaled 1.5x in four half-pixel-shifted
@@ -225,8 +250,7 @@ All numbers are starting values and live in the config.
 ## Config and files
 - Entry point: python main.py live | replay FOLDER | walk X | safe. walk and
   safe press game keys (stage 7 tests): walk to minimap x X, or go to the
-  closest safe spot. fight (stage 8 test) attacks reachable mobs until the
-  kill hotkey.
+  closest safe spot. train fights, loots and sweeps until the kill hotkey.
 - Settings in config.toml: window title, keybinds stored by action name (attack, skill,
   loot, chair, jump, minimap), thresholds, intervals. Hand-edited now. A GUI will edit
   the same file later.
@@ -254,12 +278,10 @@ All numbers are starting values and live in the config.
   (duration, deaths seen, unexpected screens, frames saved).
 
 ## Open items (ask, do not guess)
-- Which skill and its key (later; v1 uses basic attack for now); keybinds
-  for loot and chair; the warrior's attack range
+- Which skill and its key (later; v1 uses basic attack for now); chair key;
+  the warrior's attack range
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
-- How long the minimap x must stay unchanged to count as reaching the end of
-  the floor (shorter than the 3 s stuck limit); decide at stage 9
 - Which mobs can reach the safe platform while resting (whether Red Snail or
   Orange Mushroom detection is needed for "hit while sitting"); decide at
   stage 10
@@ -268,6 +290,13 @@ All numbers are starting values and live in the config.
 - From the admins: run report contents, whether the real server's client
   blocks synthetic input (the test server's does not), whether the real server's client runs as administrator (the test
   server's does)
+
+## Findings for the admins (run report)
+- 2026-10-06: the test server's bot detection started flagging the trainer
+  during stage 9 testing. Suspected (not confirmed) signal: very regular
+  input timing; the loop runs at a fixed 10 Hz and the held loot key's
+  key-down is re-sent at that steady rate. Anti-detection stays out of v1;
+  change input timing only if the admins ask for an evasion test.
 
 ## After v1
 Mapping as its own part of the tool, separate from the trainer: marking

@@ -30,6 +30,8 @@ class Mover:
         self.search_step = c["search_step"]
         self.search_max_offset = c["search_max_offset"]
         self.search_max_tries = c["search_max_tries"]
+        # Called on every reading while moving (e.g. to tap the loot key).
+        self.on_tick = None
 
     # --- reading -----------------------------------------------------------
 
@@ -39,6 +41,8 @@ class Mover:
         end = time.monotonic() + wait_s
         while True:
             reading = self.session.tick()
+            if self.on_tick:
+                self.on_tick()
             if reading and reading.state == "normal" and reading.dot:
                 return reading.dot
             if time.monotonic() > end:

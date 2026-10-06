@@ -74,6 +74,31 @@ left = "left"
 right = "right"
 minimap = "m"
 attack = "ctrl"
+loot = "z"
+
+[map]
+# Screen px per minimap px: the map's minimap area is 2317 game px wide
+# (maplestory.io map data, Henesys Hunting Ground I) shown as 214 minimap px,
+# and the client stretches the game 1.5x: 2317 / 214 * 1.5 = 16.2.
+screen_px_per_minimap_px = 16.2
+
+[loot]
+# After a kill, walk (loot key held) the way the character faced, this many
+# screen px past the spot where the mob died. 60 went too far; trying 40.
+past_px = 40
+
+[sweep]
+# While sweeping, the minimap x unchanged this long (s) = a wall: turn around.
+wall_s = 1.0
+# Stay this many minimap px away from each side of the minimap (the
+# character gets lost at the very edges): sweeping turns around there, and
+# mobs beyond it are not targeted.
+edge_margin = 20
+
+[rest]
+# HP % below which the bot goes to rest (stage 10); the loot walk after a
+# kill is skipped below it.
+hp_low_percent = 25
 
 [attack]
 # Attack when the target's feet are within this many screen px (left or

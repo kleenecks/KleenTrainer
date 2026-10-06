@@ -4,7 +4,7 @@
   python main.py replay FOLDER           step through saved frames
   python main.py walk X                  walk to minimap x X (presses keys)
   python main.py safe                    go to the closest safe spot (presses keys)
-  python main.py fight                   attack reachable mobs (presses keys)
+  python main.py train                   fight, loot and sweep (presses keys)
 
 Each command can take a config file as its last argument (default
 config.toml). walk and safe press game keys: run them from an administrator
@@ -29,7 +29,6 @@ from pathlib import Path
 
 from pynput import keyboard
 
-import attack
 import capture
 import keys
 import minimap
@@ -40,6 +39,7 @@ import player
 import points
 import runlog
 import status
+import trainer
 import window
 
 
@@ -159,10 +159,9 @@ class Detectors:
         self.was_dead = dead
         return lines, rects, points
 
-    def status_line(self, input_on=False):
+    def status_line(self, state):
         dot = self.reading.dot if self.reading else None
         where = f"minimap {dot}" if dot else "minimap position unknown"
-        state = "moving" if input_on else "watching"
         return f"Status: {where}, {bar_text('HP', self.hp)}, {bar_text('MP', self.mp)}, state {state}"
 
 
@@ -230,6 +229,7 @@ class Session:
         self.last_focus_loss = 0.0
         self.reopen_tried = False
         self.attacker = None   # set by tasks that fight, for the summary
+        self.state = "moving" if input_on else "watching"   # for the status line
         self.started = time.perf_counter()
         print(f"Run folder: {self.run_dir}")
         print(f"Press {hotkeys['kill']} (kill hotkey) or Ctrl+C here to stop.")
@@ -259,7 +259,7 @@ class Session:
             self.requests[name].clear()
 
         if self.log.status_due():
-            self.log.event(self.detectors.status_line(self.input_on))
+            self.log.event(self.detectors.status_line(self.state))
         if self.frame is not None:
             h, w = self.frame.shape[:2]
             self.view.show(self.frame, [mode, f"client {w}x{h}"] + lines, rects, pts)
@@ -378,23 +378,15 @@ def walk(config, x):
     run_session(config, True, task)
 
 
-def fight(config):
-    """Input on: attack reachable mobs with the basic attack until the kill
-    hotkey. No sweeping or looting yet (stage 9)."""
+def train(config):
+    """Input on: fight, loot and sweep the bottom floor until the kill hotkey
+    (resting comes in stage 10)."""
     def task(session):
-        movement.Mover(session, config).ensure_minimap()
-        attacker = attack.Attacker(session, config)
-        session.attacker = attacker
+        t = trainer.Trainer(session, config)
         try:
-            had_target = False
-            while True:
-                has_target = attacker.step()
-                if has_target != had_target:
-                    session.log.event("Target found; fighting." if has_target
-                                      else "No reachable mob; waiting.")
-                had_target = has_target
+            t.run()
         finally:
-            attacker.stop()
+            t.attacker.stop()
     run_session(config, True, task)
 
 
@@ -474,7 +466,7 @@ def replay(config, folder):
 def main():
     args = sys.argv[1:]
     # Commands and how many arguments they take before the optional config.
-    commands = {"live": 0, "replay": 1, "walk": 1, "safe": 0, "fight": 0}
+    commands = {"live": 0, "replay": 1, "walk": 1, "safe": 0, "train": 0}
     if not args or args[0] not in commands or len(args) < 1 + commands[args[0]]:
         sys.exit(__doc__)
     command, rest = args[0], args[1:]
@@ -486,8 +478,8 @@ def main():
         replay(config, rest[0])
     elif command == "walk":
         walk(config, int(rest[0]))
-    elif command == "fight":
-        fight(config)
+    elif command == "train":
+        train(config)
     else:
         go_safe(config)
 

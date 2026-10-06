@@ -42,6 +42,17 @@ class Keys:
             pydirectinput.keyDown(key)
             self.held.add(key)
 
+    def hold_repeating(self, action):
+        """Hold a key and send its key-down again on every call, like a real
+        held key that Windows auto-repeats. Injected key presses are not
+        auto-repeated, and some game actions (picking up loot) only react to
+        each key-down. Call it once per loop step while the key should be
+        held; release() lets go."""
+        key = self._key(action)
+        self._guard()
+        pydirectinput.keyDown(key)
+        self.held.add(key)
+
     def release(self, action):
         key = self._key(action)
         if key in self.held:
