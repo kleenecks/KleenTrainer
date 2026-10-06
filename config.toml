@@ -73,6 +73,18 @@ jump = "alt"
 left = "left"
 right = "right"
 minimap = "m"
+attack = "ctrl"
+
+[attack]
+# Attack when the target's feet are within this many screen px (left or
+# right) of the character's feet. 90 hit; raised to try further out.
+range_px = 120
+# The target counts as gone (killed or lost) after this many seconds unseen;
+# shorter gaps (e.g. hidden behind loot) keep the same target.
+target_lost_s = 0.5
+# While walking to an out-of-range target, switch to a mob that is closer by
+# more than this many screen px. A target in range is never switched.
+switch_margin_px = 40
 
 [movement]
 # All distances in minimap px.

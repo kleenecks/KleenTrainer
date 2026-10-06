@@ -112,6 +112,16 @@ All numbers are starting values and live in the config.
   jump fails, keep going.
 - Hit while sitting: kill the mob, sit again.
 - MP: below 10% use basic attacks. Resume the skill above 50%.
+- Attack (v1 for now: basic attack only, key Ctrl; the skill and the
+  warrior's values come later). Target = nearest reachable mob, then sticky:
+  the bot stays on it until it has not been seen for 0.5 s (config; killed or
+  gone). Shorter gaps, e.g. hidden behind loot, keep the target. While
+  walking to an out-of-range target, a mob closer by more than 40 screen px
+  (config) takes over; a target in range is never switched. Out of range:
+  walk toward it. Facing away (the character faces
+  the way it last moved): tap the arrow toward it. In range and facing it:
+  hold Ctrl (the game repeats the swing) until the target is gone or out of
+  range. Range: screen px between the feet (config). 90 hit; now trying 120.
 - Movement stuck: movement keys sent but minimap position unchanged for 3 s.
   Recovery: jump, then walk the opposite way for 1 s and retry. After 3 failed
   attempts, stop and log with a screenshot.
@@ -215,7 +225,8 @@ All numbers are starting values and live in the config.
 ## Config and files
 - Entry point: python main.py live | replay FOLDER | walk X | safe. walk and
   safe press game keys (stage 7 tests): walk to minimap x X, or go to the
-  closest safe spot.
+  closest safe spot. fight (stage 8 test) attacks reachable mobs until the
+  kill hotkey.
 - Settings in config.toml: window title, keybinds stored by action name (attack, skill,
   loot, chair, jump, minimap), thresholds, intervals. Hand-edited now. A GUI will edit
   the same file later.
@@ -243,8 +254,8 @@ All numbers are starting values and live in the config.
   (duration, deaths seen, unexpected screens, frames saved).
 
 ## Open items (ask, do not guess)
-- Which skill; keybinds for attack, skill, loot, chair; attack range and
-  facing
+- Which skill and its key (later; v1 uses basic attack for now); keybinds
+  for loot and chair; the warrior's attack range
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
 - How long the minimap x must stay unchanged to count as reaching the end of

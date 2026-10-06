@@ -4,6 +4,7 @@
   python main.py replay FOLDER           step through saved frames
   python main.py walk X                  walk to minimap x X (presses keys)
   python main.py safe                    go to the closest safe spot (presses keys)
+  python main.py fight                   attack reachable mobs (presses keys)
 
 Each command can take a config file as its last argument (default
 config.toml). walk and safe press game keys: run them from an administrator
@@ -28,6 +29,7 @@ from pathlib import Path
 
 from pynput import keyboard
 
+import attack
 import capture
 import keys
 import minimap
@@ -110,8 +112,11 @@ class Detectors:
         self.last_unexpected = None
         self.deaths = 0
         self.unexpected_screens = 0
-        # Latest readings, for the status line and the safe-spot marker.
+        # Latest readings, for the status line, the safe-spot marker and the
+        # attack: minimap reading, player reading, reachable mobs, HP, MP.
         self.reading = None
+        self.me = None
+        self.found = []
         self.hp = self.mp = None
 
     def run(self, frame, now=None):
@@ -127,6 +132,8 @@ class Detectors:
             rects += view[1]
             points += view[2]
         self.reading = reading
+        self.me = me
+        self.found = found
         self.hp = status.bar_fill(frame, self.hp_bar)
         self.mp = status.bar_fill(frame, self.mp_bar)
         lines.append(bar_text("HP", self.hp) + ", " + bar_text("MP", self.mp))
@@ -222,6 +229,7 @@ class Session:
         self.focus_losses = 0
         self.last_focus_loss = 0.0
         self.reopen_tried = False
+        self.attacker = None   # set by tasks that fight, for the summary
         self.started = time.perf_counter()
         print(f"Run folder: {self.run_dir}")
         print(f"Press {hotkeys['kill']} (kill hotkey) or Ctrl+C here to stop.")
@@ -321,7 +329,8 @@ class Session:
         d = self.detectors
         self.log.event(f"Summary: duration {self.log.duration()}, deaths seen {d.deaths}, "
                        f"unexpected screens {d.unexpected_screens}, "
-                       f"focus losses {self.focus_losses}, frames saved {self.saved}.")
+                       f"focus losses {self.focus_losses}, frames saved {self.saved}"
+                       + (f", attacks {self.attacker.attacks}" if self.attacker else "") + ".")
         self.log.close()
 
 
@@ -366,6 +375,26 @@ def walk(config, x):
         mover.ensure_minimap()
         mover.walk_to(x)
         session.log.event(f"Arrived at minimap {mover.settle()}.")
+    run_session(config, True, task)
+
+
+def fight(config):
+    """Input on: attack reachable mobs with the basic attack until the kill
+    hotkey. No sweeping or looting yet (stage 9)."""
+    def task(session):
+        movement.Mover(session, config).ensure_minimap()
+        attacker = attack.Attacker(session, config)
+        session.attacker = attacker
+        try:
+            had_target = False
+            while True:
+                has_target = attacker.step()
+                if has_target != had_target:
+                    session.log.event("Target found; fighting." if has_target
+                                      else "No reachable mob; waiting.")
+                had_target = has_target
+        finally:
+            attacker.stop()
     run_session(config, True, task)
 
 
@@ -445,7 +474,7 @@ def replay(config, folder):
 def main():
     args = sys.argv[1:]
     # Commands and how many arguments they take before the optional config.
-    commands = {"live": 0, "replay": 1, "walk": 1, "safe": 0}
+    commands = {"live": 0, "replay": 1, "walk": 1, "safe": 0, "fight": 0}
     if not args or args[0] not in commands or len(args) < 1 + commands[args[0]]:
         sys.exit(__doc__)
     command, rest = args[0], args[1:]
@@ -457,6 +486,8 @@ def main():
         replay(config, rest[0])
     elif command == "walk":
         walk(config, int(rest[0]))
+    elif command == "fight":
+        fight(config)
     else:
         go_safe(config)
 
