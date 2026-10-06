@@ -5,3 +5,13 @@ window_title = "Kaizen v92"
 
 # Seconds to wait after bringing the client to the front before capturing.
 focus_settle_s = 0.5
+
+# Live loop: frames captured per second.
+capture_fps = 10
+
+# Debug overlay size relative to the client (0.5 = half size).
+overlay_scale = 0.3
+
+[hotkeys]
+# Saves the current frame as a PNG in the run folder.
+save_frame = "f10"

@@ -116,8 +116,16 @@ All numbers are starting values and live in the config.
 - Stages 1 to 6 are validated with the user playing. The debug overlay shows
   detections and, from stage 5, what the bot would do.
 - Frames can be saved and replayed so detection is testable without the game.
+  The save-frame hotkey (F10) writes a PNG to the run folder's frames/
+  subfolder. Replay loads a folder of PNGs.
+- Debug overlay: a separate OpenCV window showing a scaled copy of the frame,
+  placed by the user beside the client (anything over the client gets
+  captured). Never drawn on the game.
+- The live watch loop pauses while the client is not in front and does not
+  pull focus; the bring-to-front rule applies to saved screenshots.
 
 ## Config and files
+- Entry point: python main.py live | replay FOLDER
 - Settings in config.toml: window title, keybinds stored by action name (attack, skill,
   loot, chair, jump, minimap), thresholds, intervals. Hand-edited now. A GUI will edit
   the same file later.
