@@ -122,6 +122,10 @@ All numbers are starting values and live in the config.
 ## Detection approach
 - All screen regions are relative to the client window, never absolute screen
   coordinates.
+- The test server's game draws at 1366x768 and the client stretches it 1.5x
+  with smoothing to 2049x1152. Game sprites (mobs) must be scaled 1.5x to
+  match the screen. Templates cut from captured frames are already at screen
+  scale.
 - Minimap: the - / + / WORLD button group gives the state (normal: both blue;
   large: + greyed; closed: - greyed). In the normal state, template-match the
   inner corners of the minimap frame to get the map area, then template-match
@@ -144,8 +148,24 @@ All numbers are starting values and live in the config.
   it lost.
   Populated maps may cover the tag or contain lookalike names; revisit if
   that becomes a problem.
-- Mob templates come from the game's WZ files. Account for multiple animation
-  frames, transparency, and both facings.
+- Mob templates are the game's own sprites (WZ data), downloaded from
+  maplestory.io (GMS v92) by fetch_mobs.py into templates/mobs/<name>/ as
+  <animation>_<frame>.png, facing left. Account for multiple animation
+  frames, transparency, and both facings. Mobs on the v1 map's bottom floor,
+  where v1 fights ([mobs] in config): Blue Snail, Shroom. Red Snail and
+  Orange Mushroom spawn elsewhere on the map; their sprites are downloaded
+  but not detected.
+- Mob detection (mobs.py): only the rows where a mob's feet would be within
+  10 px (config) of the character's feet are searched, which is the
+  reachable filter. Each sprite is scaled 1.5x in four half-pixel-shifted
+  versions, plus mirrored for facing right; only stand, move and hit1 frames
+  are used. A rough half-size grayscale pass on just that strip picks
+  candidates, grouped per mob and spot; an exact color pass confirms each
+  group. Matches run in parallel threads. About 14 ms typical, 32 ms busy.
+- Live loop timing (test laptop): about 90 ms per frame, of which screen
+  capture is about 45 ms and HP/MP/death about 17 ms.
+- The overlay marks reachable mobs and boxes the target the bot would pick
+  (nearest reachable mob; the sweep-area ends come in stage 6).
 - Stages 1 to 6 are validated with the user playing. The debug overlay shows
   detections and, from stage 5, what the bot would do.
 - Frames can be saved and replayed so detection is testable without the game.
@@ -187,12 +207,13 @@ All numbers are starting values and live in the config.
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
 - Focus lost: how many times in a row before stopping (decide at stage 7)
-- Mob list on the map
 - Points to mark and their hotkeys; kill hotkey; which safe zone when several
-- Jump-over trigger distance; height tolerance for reachable mobs
+- Which mobs can reach the safe platform while resting (whether Red Snail or
+  Orange Mushroom detection is needed for "hit while sitting"); decide at
+  stage 10
+- Jump-over trigger distance
 - Points file name
 - Overnight PC settings: sleep, lock, updates, display scaling
-- WZ extraction tool
 - From the admins: run report contents, whether the real server's client
   blocks synthetic input (the test server's does not), whether the real server's client runs as administrator (the test
   server's does)

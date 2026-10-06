@@ -20,6 +20,7 @@ from pynput import keyboard
 
 import capture
 import minimap
+import mobs
 import overlay
 import player
 import status
@@ -57,6 +58,20 @@ def player_view(reading):
     return [f"player: {reading.status}{score}, feet ({x}, {y})"], [], [reading.feet]
 
 
+def mob_view(found, feet):
+    """Overlay text, boxes and points for reachable mobs. The box marks the
+    target the bot would pick: the nearest reachable mob."""
+    if feet is None:
+        return ["mobs: no player position"], [], []
+    if not found:
+        return ["mobs: none reachable"], [], []
+    target = min(found, key=lambda m: abs(m.feet[0] - feet[0]))
+    tx, ty = target.feet
+    box = capture.Region(tx - 30, ty - 60, 60, 64)
+    return ([f"mobs: {len(found)} reachable, target {target.name} at ({tx}, {ty})"],
+            [box], [m.feet for m in found])
+
+
 def bar_text(name, fill):
     return f"{name} unreadable" if fill is None else f"{name} {fill:.0f}%"
 
@@ -67,6 +82,7 @@ class Detectors:
         self.player = player.PlayerLocator(config["player"])
         self.unexpected = status.UnexpectedScreenWatch(config["status"])
         self.death = status.DeathDetector(config["status"])
+        self.mobs = mobs.MobDetector(list(config["mobs"]), config["mob_detection"])
         self.was_dead = False
         self.hp_bar = config["status"]["hp_bar"]
         self.mp_bar = config["status"]["mp_bar"]
@@ -77,7 +93,9 @@ class Detectors:
         now = time.monotonic() if now is None else now
         lines, rects, points = [], [], []
         reading = self.minimap.read(frame)
-        for view in (minimap_view(reading), player_view(self.player.read(frame, now))):
+        me = self.player.read(frame, now)
+        found = self.mobs.detect(frame, me.feet[1]) if me.feet else []
+        for view in (minimap_view(reading), player_view(me), mob_view(found, me.feet)):
             lines += view[0]
             rects += view[1]
             points += view[2]

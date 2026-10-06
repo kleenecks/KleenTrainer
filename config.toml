@@ -47,6 +47,23 @@ death_dialog = "templates/death_dialog.png"
 death_dialog_at = [935, 203]
 death_min_score = 0.8
 
+[mobs]
+# Mobs to detect (the training map's bottom floor): folder name under
+# templates/mobs/ = mob ID. Red Snail (130101) and Orange Mushroom (1210102)
+# live elsewhere on the map.
+blue_snail = 100101
+shroom = 120100
+
+[mob_detection]
+# A mob is reachable when its feet are within this many px (up or down) of
+# the character's feet.
+height_tolerance = 10
+# Highest grey-level difference for a match. Real mobs score 0.5 to 7.
+max_rms = 12
+# Looser limit for the rough half-size pass that picks candidates. Real mobs
+# score up to about 39 there, spots without mobs 43 and up.
+rough_max_rms = 45
+
 [keys]
 # Game keybinds by action, as pydirectinput key names.
 jump = "alt"
