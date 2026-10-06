@@ -1,10 +1,11 @@
 """Find the character on screen from its name tag.
 
 The name tag is light grey text in a see-through dark box. Only pixels that
-are light grey count; the template scores +1 for each letter pixel found and
--1 for each light pixel where the dark box should be. So a tag partly covered
-by grass or mobs still scores well (it only loses the covered letters), while
-white areas like clouds score low.
+are light grey count. The score is the share of the template's letter pixels
+that have a light pixel within 1 px (letter edges render a little
+differently over different backgrounds), minus light pixels where the dark
+box should be. So a tag partly covered by grass or mobs still scores well
+(it only loses the covered letters), while white areas like clouds score low.
 
 The template is a plain crop of the tag box, top edge at the box's top. Cut
 one per character.
@@ -22,6 +23,8 @@ from capture import Region
 TAG_TO_FEET_Y = 5
 # How far the tag is searched for around its last position.
 TRACK_MARGIN = 60
+# A letter pixel counts as found if a light pixel is within 1 px of it.
+NEAR = np.ones((3, 3), np.uint8)
 
 
 def _light(image):
@@ -42,7 +45,9 @@ class PlayerLocator:
     def __init__(self, config):
         tag = cv2.imread(config["name_tag"])
         letters = _light(tag)
-        self.kernel = np.where(letters > 0, 1.0, -1.0).astype(np.float32)
+        self.letters = letters
+        # Box pixels at least 1 px away from any letter: these should be dark.
+        self.box = (cv2.dilate(letters, NEAR) == 0).astype(np.float32)
         self.letter_count = letters.sum()
         self.min_score = config["min_score"]
         self.hold_s = config["lost_hold_s"]
@@ -71,15 +76,18 @@ class PlayerLocator:
         return Reading("lost")
 
     def _feet(self, x, y):
-        return x + self.kernel.shape[1] // 2, y - TAG_TO_FEET_Y
+        return x + self.letters.shape[1] // 2, y - TAG_TO_FEET_Y
 
     def _search(self, world, area):
         """((x, y), score) of the best tag whose top-left is inside area, or None."""
-        h, w = self.kernel.shape
+        h, w = self.letters.shape
         search = Region(area.x, area.y, area.width + w, area.height + h).crop(world)
         if search.shape[0] < h or search.shape[1] < w:
             return None
-        scores = cv2.matchTemplate(_light(search), self.kernel, cv2.TM_CCORR) / self.letter_count
+        light = _light(search)
+        hits = cv2.matchTemplate(cv2.dilate(light, NEAR), self.letters, cv2.TM_CCORR)
+        stray = cv2.matchTemplate(light, self.box, cv2.TM_CCORR)
+        scores = (hits - stray) / self.letter_count
         _, score, _, at = cv2.minMaxLoc(scores)
         if score < self.min_score:
             return None

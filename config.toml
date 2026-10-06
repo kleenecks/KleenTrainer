@@ -9,7 +9,10 @@ focus_settle_s = 0.5
 # Live loop: frames captured per second.
 capture_fps = 10
 
-# Debug overlay size relative to the client (0.5 = half size).
+# Live debug overlay: "game" draws directly over the client; "window" shows
+# a scaled copy in a separate window (replay always uses the window).
+overlay = "game"
+# Separate overlay window size relative to the client (0.5 = half size).
 overlay_scale = 0.4
 
 [minimap]
@@ -23,14 +26,26 @@ dot_min_score = 0.7
 [player]
 # Crop of this character's name tag box (cut one per character).
 name_tag = "templates/name_tag.png"
-# Lowest share of the tag's letters (0 to 1) that must be visible to count
-# as found. Clear tags score about 0.95, tags half covered by grass about 0.3.
-min_score = 0.25
+# Lowest tag score (0 to 1) to count as found. Visible tags score 0.96 to
+# 1.0, tags partly covered by mobs about 0.77, other spots at most 0.38.
+min_score = 0.6
 # Seconds to keep the last position when the tag is covered.
 lost_hold_s = 1.0
 # The game world ends here; below is the chat bar and status bar, which also
 # show the character's name.
 world_bottom = 1050
+
+[status]
+# Bars are read along one row: [first x, last x, y] in client pixels.
+hp_bar = [330, 487, 1135]
+mp_bar = [492, 649, 1135]
+# Seconds without a normal minimap before the screen counts as unexpected.
+minimap_missing_s = 3
+# Headline of the death dialog, where it appears (top-left, client pixels),
+# and the lowest match score (0 to 1). It scores 1.0; other frames <= 0.24.
+death_dialog = "templates/death_dialog.png"
+death_dialog_at = [935, 203]
+death_min_score = 0.8
 
 [hotkeys]
 # Saves the current frame as a PNG in the run folder.

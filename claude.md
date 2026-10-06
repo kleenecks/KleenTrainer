@@ -102,8 +102,18 @@ All numbers are starting values and live in the config.
   if it is still not found 3 s later.
 - Unexpected screen: minimap still missing after the reopen attempt above, or
   minimap size differs from startup. Release keys, console message, log
-  entry, stop. Dialog box detection is an open item.
-- Death: stop and log. Detection method is an open item.
+  entry, stop. Dialog boxes are not detected directly in v1; the stuck and
+  minimap checks catch them. Revisit if one causes trouble overnight.
+- Death: stop and log. Detected by template-matching the "PRESS OK TO BE
+  REVIVED." headline of the death dialog, near its usual spot. The dialog
+  appears a couple of seconds after dying.
+- HP and MP: read from how much of the red and blue status bars is filled,
+  along one row of each bar (positions in config.toml). Filled = colored,
+  empty = grey; anything else means the bar is covered and reads as
+  unreadable. At low HP (seen from about 41%) the HP bar blinks between its
+  normal look and a dark one, so brightness is ignored.
+- In stages 1 to 6 an unexpected screen is shown on the overlay and printed;
+  nothing stops.
 
 ## Detection approach
 - All screen regions are relative to the client window, never absolute screen
@@ -121,7 +131,9 @@ All numbers are starting values and live in the config.
   and clamps at map edges, so the character is not always at screen center.
   Found by matching the character's name tag (one template per character,
   templates/name_tag.png for the test Wizard). Only light grey letter pixels
-  are compared, so a tag partly covered by grass or mobs still matches. The
+  are compared, each allowed to be 1 px off (letter edges render slightly
+  differently over different backgrounds), so a tag partly covered by grass
+  or mobs still matches. The
   feet are 5 px above the top of the tag box, at its center. Search above the
   bottom UI only (it also shows the name). Search near the last position
   first; when the tag is covered, keep the last position for 1 s, then report
@@ -135,9 +147,13 @@ All numbers are starting values and live in the config.
 - Frames can be saved and replayed so detection is testable without the game.
   The save-frame hotkey (Delete) writes a PNG to the run folder's frames/
   subfolder. Replay loads a folder of PNGs.
-- Debug overlay: a separate OpenCV window showing a scaled copy of the frame,
-  placed by the user beside the client (anything over the client gets
-  captured). Never drawn on the game.
+- Debug overlay (config: overlay = "game" or "window"):
+  - game (default): a see-through, click-through window drawn directly over
+    the client. It is excluded from screen capture (Windows 10 2004+), so the
+    bot never sees its own drawings, and it never takes focus. Status text is
+    at the top right. Quit with Ctrl+C in the terminal.
+  - window: a separate OpenCV window showing a scaled copy of the frame,
+    placed beside the client. Replay always uses this one.
 - The live watch loop pauses while the client is not in front and does not
   pull focus; the bring-to-front rule applies to saved screenshots.
 
@@ -167,10 +183,6 @@ All numbers are starting values and live in the config.
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
 - Focus lost: how many times in a row before stopping (decide at stage 7)
-- Death detection method: death dialog template, HP bar empty, or both
-  (decide at stage 4)
-- Dialog box detection: the stuck check misses dialogs during attacks and
-  rest; detect directly or accept the gap (decide at stage 4)
 - Mob list on the map
 - Points to mark and their hotkeys; kill hotkey; which safe zone when several
 - Jump-over trigger distance; height tolerance for reachable mobs

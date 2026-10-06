@@ -4,8 +4,8 @@
   python main.py replay FOLDER           step through saved frames
 
 Live: press the save-frame hotkey (config) in the game to save a PNG to the
-run folder. Pauses while the client is not in front. Press q in the overlay
-or close it to quit.
+run folder. Pauses while the client is not in front. Quit with Ctrl+C in the
+terminal (or q in the separate overlay window, if that one is used).
 Replay: in the overlay, n or space = next, p = previous, q = quit.
 """
 
@@ -22,6 +22,7 @@ import capture
 import minimap
 import overlay
 import player
+import status
 import window
 
 
@@ -56,15 +57,49 @@ def player_view(reading):
     return [f"player: {reading.status}{score}, feet ({x}, {y})"], [], [reading.feet]
 
 
-def detect(frame, minimap_reader, player_locator):
-    """Run every detector on frame; returns overlay lines, rects and points."""
-    lines, rects, points = [], [], []
-    for view in (minimap_view(minimap_reader.read(frame)),
-                 player_view(player_locator.read(frame))):
-        lines += view[0]
-        rects += view[1]
-        points += view[2]
-    return lines, rects, points
+def bar_text(name, fill):
+    return f"{name} unreadable" if fill is None else f"{name} {fill:.0f}%"
+
+
+class Detectors:
+    def __init__(self, config):
+        self.minimap = minimap.MinimapReader(config["minimap"])
+        self.player = player.PlayerLocator(config["player"])
+        self.unexpected = status.UnexpectedScreenWatch(config["status"])
+        self.death = status.DeathDetector(config["status"])
+        self.was_dead = False
+        self.hp_bar = config["status"]["hp_bar"]
+        self.mp_bar = config["status"]["mp_bar"]
+        self.last_unexpected = None
+
+    def run(self, frame, now=None):
+        """Run every detector on frame; returns overlay lines, rects and points."""
+        now = time.monotonic() if now is None else now
+        lines, rects, points = [], [], []
+        reading = self.minimap.read(frame)
+        for view in (minimap_view(reading), player_view(self.player.read(frame, now))):
+            lines += view[0]
+            rects += view[1]
+            points += view[2]
+        lines.append(bar_text("HP", status.bar_fill(frame, self.hp_bar)) + ", " +
+                     bar_text("MP", status.bar_fill(frame, self.mp_bar)))
+
+        # The bot only watches in stages 1 to 6, so an unexpected screen is
+        # shown and printed rather than stopping anything.
+        reason = self.unexpected.update(reading, now)
+        if reason:
+            lines.insert(0, f"UNEXPECTED SCREEN: {reason}")
+            if self.last_unexpected is None:
+                print(f"Unexpected screen: {reason}")
+        self.last_unexpected = reason
+
+        dead = self.death.is_dead(frame)
+        if dead:
+            lines.insert(0, "DEAD")
+            if not self.was_dead:
+                print("Death detected.")
+        self.was_dead = dead
+        return lines, rects, points
 
 
 def live(config):
@@ -91,21 +126,25 @@ def live(config):
     listener.start()
 
     capturer = capture.Capturer(hwnd)
-    reader = minimap.MinimapReader(config["minimap"])
+    detectors = Detectors(config)
     # Stages 1 to 6 send no input, so the bot cannot open the minimap itself.
-    state = reader.read(capturer.grab()).state
+    state = detectors.minimap.read(capturer.grab()).state
     if state != "normal":
         capturer.close()
         listener.stop()
         sys.exit(f"The minimap is {state}. Open it at normal size "
                  "(not large, not closed) and run again.")
 
-    locator = player.PlayerLocator(config["player"])
-    view = overlay.Overlay(config["overlay_scale"])
+    if config["overlay"] == "game":
+        view = overlay.GameOverlay(hwnd)
+    else:
+        view = overlay.Overlay(config["overlay_scale"])
+    # Opening the overlay window can take focus from the client.
+    window.bring_to_front(hwnd, config["focus_settle_s"])
     interval = 1 / config["capture_fps"]
     frame = None
     print(f"Run folder: {run_dir}")
-    print("Watching. Press q in the overlay to quit.")
+    print("Watching. Press Ctrl+C here to quit.")
 
     try:
         while True:
@@ -116,21 +155,23 @@ def live(config):
 
             if window.is_foreground(hwnd):
                 frame = capturer.grab()
-                lines, rects, points = detect(frame, reader, locator)
-                status = "LIVE"
+                lines, rects, points = detectors.run(frame)
+                mode = "LIVE"
                 if save_requested.is_set():
                     print(f"Saved {capture.save_frame(frame, frames_dir)}")
             else:
-                status = "PAUSED: client not in front"
+                mode = "PAUSED: client not in front"
             save_requested.clear()
 
             if frame is not None:
                 h, w = frame.shape[:2]
-                view.show(frame, [status, f"client {w}x{h}"] + lines, rects, points)
+                view.show(frame, [mode, f"client {w}x{h}"] + lines, rects, points)
 
             wait = max(1, int((interval - (time.perf_counter() - started)) * 1000))
             if view.key(wait) == ord("q") or view.is_closed():
                 break
+    except KeyboardInterrupt:
+        print("Stopped.")
     finally:
         listener.stop()
         capturer.close()
@@ -142,8 +183,7 @@ def replay(config, folder):
     if not frames:
         sys.exit(f"No PNG files in {folder}")
 
-    reader = minimap.MinimapReader(config["minimap"])
-    locator = player.PlayerLocator(config["player"])
+    detectors = Detectors(config)
     view = overlay.Overlay(config["overlay_scale"])
     i, shown = 0, None
     try:
@@ -151,7 +191,7 @@ def replay(config, folder):
             if shown != i:
                 # Detect once per frame shown, not on every redraw.
                 path, frame = frames[i]
-                lines, rects, points = detect(frame, reader, locator)
+                lines, rects, points = detectors.run(frame)
                 view.show(frame, [f"REPLAY {i + 1}/{len(frames)}", path.name] + lines,
                           rects, points)
                 shown = i
