@@ -50,9 +50,13 @@ Observe only (the user plays, the bot only watches):
 5. Mob detection: animation frames, both facings, reachable filter
 6. Hotkeys and logging: kill hotkey, point marker, basic log
 
+Input check (done after stage 4, before stage 5, to confirm the input method
+early): input_test.py presses jump once with pydirectinput and checks that
+the name tag moved up. Run it from an administrator terminal. Result on the
+test server: PASS (the client accepts pydirectinput keys).
+
 Bot takes input:
-7. Movement: input smoke test (make the character jump once), open the
-   minimap when not expanded, walk to x, jump onto a safe platform, focus
+7. Movement: open the minimap when not expanded, walk to x, jump onto a safe platform, focus
    check
 8. Attack
 9. Sweep and loot
@@ -176,8 +180,8 @@ All numbers are starting values and live in the config.
 - No per-keypress logging.
 
 ## Open items (ask, do not guess)
-- Which skill; keybinds for attack, skill, loot, chair, jump, minimap; attack
-  range and facing
+- Which skill; keybinds for attack, skill, loot, chair, minimap (jump is
+  Alt); attack range and facing
 - What the minimap key does when the minimap is large (switch to normal, or
   close it so a second press is needed); check in-game before stage 7
 - Client resolution on the real server. The test server uses a custom size
@@ -189,8 +193,8 @@ All numbers are starting values and live in the config.
 - Points file name
 - Overnight PC settings: sleep, lock, updates, display scaling
 - WZ extraction tool
-- From the admins: run report contents, whether the client blocks synthetic
-  input, whether the real server's client runs as administrator (the test
+- From the admins: run report contents, whether the real server's client
+  blocks synthetic input (the test server's does not), whether the real server's client runs as administrator (the test
   server's does)
 
 ## After v1

@@ -47,6 +47,10 @@ death_dialog = "templates/death_dialog.png"
 death_dialog_at = [935, 203]
 death_min_score = 0.8
 
+[keys]
+# Game keybinds by action, as pydirectinput key names.
+jump = "alt"
+
 [hotkeys]
 # Saves the current frame as a PNG in the run folder.
 save_frame = "delete"
