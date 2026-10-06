@@ -1,6 +1,6 @@
 # KleenTrainer
 
-Auto-training bot for a v83 MapleStory private server. Trains one character
+Auto-training bot for a v92 MapleStory private server. Trains one character
 unattended overnight. Doubles as a bot-detection test: run results are shared
 with the server admins.
 
@@ -17,12 +17,15 @@ with the server admins.
 - Python 3.14 on native Windows (not WSL), virtual environment in .venv
 - mss (screen capture), OpenCV + numpy (detection), pydirectinput (key input),
   pynput (hotkeys)
-- Game client runs windowed at a fixed resolution
+- ctypes (standard library) to find the client window by title
+- Game client runs windowed at a fixed resolution. Test server window title:
+  "Kaizen v92"
 - Run from the command line with a config file. No GUI in v1.
 
 ## v1 scope
 One map: Henesys Hunting Ground I. Flat ground plus platforms used as safe
-zones. Melee character, one skill plus basic attack.
+zones. Melee character, one skill plus basic attack. (The test server
+character is a Wizard and is used only for observe-only testing.)
 
 In v1: player position from the minimap, player position on screen, map points
 marked in-game with a hotkey, walking and jumping to a safe platform, mob
@@ -34,9 +37,10 @@ randomized pathing, GUI, pots, buffs, EXP tracking, anti-detection.
 
 ## Build order
 Observe only (the user plays, the bot only watches):
-0. Smoke test: capture one frame, make the character jump once
-1. Capture base: find the client window, regions relative to it, save and
-   replay frames, debug overlay
+0. Smoke test: find the client window by title and capture one frame of it.
+   No input.
+1. Capture base: regions relative to the client window, save and replay
+   frames, debug overlay
 2. Minimap reader: minimap bounds, player dot
 3. Player on-screen position
 4. Status reader: HP bar, MP bar, death, unexpected screen
@@ -44,7 +48,7 @@ Observe only (the user plays, the bot only watches):
 6. Hotkeys and logging: kill hotkey, point marker, basic log
 
 Bot takes input:
-7. Movement: walk to x, jump onto a safe platform, focus check
+7. Movement: input smoke test (make the character jump once), walk to x, jump onto a safe platform, focus check
 8. Attack
 9. Sweep and loot
 10. Rest at safe zone, with the behavior priority order
@@ -78,12 +82,16 @@ All numbers are starting values and live in the config.
   attempts, stop and log with a screenshot.
 - Attack stuck: same spot attacked for 15 s with the target still detected.
   Ignore that spot for 60 s and go back to sweeping. 3 in a row: stop and log.
-- Focus lost (client not in the foreground): release all keys, console
-  message, log entry, stop.
+- Focus lost (client not in the foreground): full-screen screenshot, release
+  all keys, console message, log entry, bring the client to the front and
+  continue. Stop instead if Windows refuses the focus change, or if focus is
+  lost too many times in a row. Every client screenshot brings the client to
+  the front first; the focus-lost full-screen screenshot is taken before
+  refocusing, so it shows what took focus.
 - Unexpected screen: minimap not found for 3 s, or minimap size differs from
-  startup. Release keys, console message, log entry, stop. Dialog boxes are
-  not detected directly; the stuck check catches them.
-- Death: stop and log.
+  startup. Release keys, console message, log entry, stop. Dialog box
+  detection is an open item.
+- Death: stop and log. Detection method is an open item.
 
 ## Detection approach
 - All screen regions are relative to the client window, never absolute screen
@@ -101,7 +109,7 @@ All numbers are starting values and live in the config.
 - Frames can be saved and replayed so detection is testable without the game.
 
 ## Config and files
-- Settings in a TOML file: keybinds stored by action name (attack, skill,
+- Settings in config.toml: window title, keybinds stored by action name (attack, skill,
   loot, chair, jump), thresholds, intervals. Hand-edited now. A GUI will edit
   the same file later.
 - Marked points in a JSON file, one per map, written by the point-marker hotkey.
@@ -120,12 +128,18 @@ All numbers are starting values and live in the config.
 ## Open items (ask, do not guess)
 - Which skill; keybinds for attack, skill, loot, chair, jump; attack range
   and facing
-- Client resolution and window title
+- Client resolution on the real server. The test server uses a custom size
+  (client area 2049x1152).
+- Focus lost: how many times in a row before stopping (decide at stage 7)
+- Death detection method: death dialog template, HP bar empty, or both
+  (decide at stage 4)
+- Dialog box detection: the stuck check misses dialogs during attacks and
+  rest; detect directly or accept the gap (decide at stage 4)
 - Mob list on the map
 - Points to mark and their hotkeys; kill hotkey; which safe zone when several
 - Jump-over trigger distance; height tolerance for reachable mobs
 - On-screen position method (name tag template match proposed, not confirmed)
-- Config and points file names
+- Points file name
 - Overnight PC settings: sleep, lock, updates, display scaling
 - WZ extraction tool
 - From the admins: run report contents, whether the client blocks synthetic
