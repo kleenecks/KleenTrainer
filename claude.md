@@ -41,14 +41,17 @@ Observe only (the user plays, the bot only watches):
    No input.
 1. Capture base: regions relative to the client window, save and replay
    frames, debug overlay
-2. Minimap reader: minimap bounds, player dot
+2. Minimap reader: minimap state (expanded, collapsed, closed), bounds,
+   player dot
 3. Player on-screen position
 4. Status reader: HP bar, MP bar, death, unexpected screen
 5. Mob detection: animation frames, both facings, reachable filter
 6. Hotkeys and logging: kill hotkey, point marker, basic log
 
 Bot takes input:
-7. Movement: input smoke test (make the character jump once), walk to x, jump onto a safe platform, focus check
+7. Movement: input smoke test (make the character jump once), open the
+   minimap when not expanded, walk to x, jump onto a safe platform, focus
+   check
 8. Attack
 9. Sweep and loot
 10. Rest at safe zone, with the behavior priority order
@@ -88,9 +91,15 @@ All numbers are starting values and live in the config.
   lost too many times in a row. Every client screenshot brings the client to
   the front first; the focus-lost full-screen screenshot is taken before
   refocusing, so it shows what took focus.
-- Unexpected screen: minimap not found for 3 s, or minimap size differs from
-  startup. Release keys, console message, log entry, stop. Dialog box
-  detection is an open item.
+- Minimap: only the expanded state counts as open; collapsed or closed does
+  not. At startup, if not open, press the minimap key and check again; stop
+  if it is still not open. In stages 1 to 6 (no input), refuse to start with
+  a console message asking the user to open it. During a run, if the minimap
+  is not found for 3 s, release keys, press the minimap key once, and stop
+  if it is still not found 3 s later.
+- Unexpected screen: minimap still missing after the reopen attempt above, or
+  minimap size differs from startup. Release keys, console message, log
+  entry, stop. Dialog box detection is an open item.
 - Death: stop and log. Detection method is an open item.
 
 ## Detection approach
@@ -110,7 +119,7 @@ All numbers are starting values and live in the config.
 
 ## Config and files
 - Settings in config.toml: window title, keybinds stored by action name (attack, skill,
-  loot, chair, jump), thresholds, intervals. Hand-edited now. A GUI will edit
+  loot, chair, jump, minimap), thresholds, intervals. Hand-edited now. A GUI will edit
   the same file later.
 - Marked points in a JSON file, one per map, written by the point-marker hotkey.
 - One folder per run under runs/, named by start date and time, holding the
@@ -126,8 +135,10 @@ All numbers are starting values and live in the config.
 - No per-keypress logging.
 
 ## Open items (ask, do not guess)
-- Which skill; keybinds for attack, skill, loot, chair, jump; attack range
-  and facing
+- Which skill; keybinds for attack, skill, loot, chair, jump, minimap; attack
+  range and facing
+- What the minimap key does when the minimap is collapsed (expand it, or
+  close it so a second press is needed); check in-game before stage 7
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
 - Focus lost: how many times in a row before stopping (decide at stage 7)
