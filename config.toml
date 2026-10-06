@@ -20,6 +20,18 @@ corner_max_rms = 8.0
 # Lowest match score (0 to 1) for the yellow player dot to count as found.
 dot_min_score = 0.7
 
+[player]
+# Crop of this character's name tag box (cut one per character).
+name_tag = "templates/name_tag.png"
+# Lowest share of the tag's letters (0 to 1) that must be visible to count
+# as found. Clear tags score about 0.95, tags half covered by grass about 0.3.
+min_score = 0.25
+# Seconds to keep the last position when the tag is covered.
+lost_hold_s = 1.0
+# The game world ends here; below is the chat bar and status bar, which also
+# show the character's name.
+world_bottom = 1050
+
 [hotkeys]
 # Saves the current frame as a PNG in the run folder.
 save_frame = "delete"

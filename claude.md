@@ -119,6 +119,15 @@ All numbers are starting values and live in the config.
   (about 1 s) runs only when that fails, e.g. on a state change.
 - Player on-screen position is separate from minimap position. The camera lags
   and clamps at map edges, so the character is not always at screen center.
+  Found by matching the character's name tag (one template per character,
+  templates/name_tag.png for the test Wizard). Only light grey letter pixels
+  are compared, so a tag partly covered by grass or mobs still matches. The
+  feet are 5 px above the top of the tag box, at its center. Search above the
+  bottom UI only (it also shows the name). Search near the last position
+  first; when the tag is covered, keep the last position for 1 s, then report
+  it lost.
+  Populated maps may cover the tag or contain lookalike names; revisit if
+  that becomes a problem.
 - Mob templates come from the game's WZ files. Account for multiple animation
   frames, transparency, and both facings.
 - Stages 1 to 6 are validated with the user playing. The debug overlay shows
@@ -165,7 +174,6 @@ All numbers are starting values and live in the config.
 - Mob list on the map
 - Points to mark and their hotkeys; kill hotkey; which safe zone when several
 - Jump-over trigger distance; height tolerance for reachable mobs
-- On-screen position method (name tag template match proposed, not confirmed)
 - Points file name
 - Overnight PC settings: sleep, lock, updates, display scaling
 - WZ extraction tool

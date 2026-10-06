@@ -21,6 +21,7 @@ from pynput import keyboard
 import capture
 import minimap
 import overlay
+import player
 import window
 
 
@@ -44,6 +45,26 @@ def minimap_view(reading):
     dx, dy = reading.dot
     return ([f"minimap: normal {b.width}x{b.height}, dot ({dx}, {dy})"],
             [b], [(b.x + dx, b.y + dy)])
+
+
+def player_view(reading):
+    """Overlay text and points for a player reading."""
+    if reading.feet is None:
+        return [f"player: {reading.status}"], [], []
+    x, y = reading.feet
+    score = f" {reading.score:.2f}" if reading.status == "found" else ""
+    return [f"player: {reading.status}{score}, feet ({x}, {y})"], [], [reading.feet]
+
+
+def detect(frame, minimap_reader, player_locator):
+    """Run every detector on frame; returns overlay lines, rects and points."""
+    lines, rects, points = [], [], []
+    for view in (minimap_view(minimap_reader.read(frame)),
+                 player_view(player_locator.read(frame))):
+        lines += view[0]
+        rects += view[1]
+        points += view[2]
+    return lines, rects, points
 
 
 def live(config):
@@ -79,6 +100,7 @@ def live(config):
         sys.exit(f"The minimap is {state}. Open it at normal size "
                  "(not large, not closed) and run again.")
 
+    locator = player.PlayerLocator(config["player"])
     view = overlay.Overlay(config["overlay_scale"])
     interval = 1 / config["capture_fps"]
     frame = None
@@ -94,7 +116,7 @@ def live(config):
 
             if window.is_foreground(hwnd):
                 frame = capturer.grab()
-                lines, rects, points = minimap_view(reader.read(frame))
+                lines, rects, points = detect(frame, reader, locator)
                 status = "LIVE"
                 if save_requested.is_set():
                     print(f"Saved {capture.save_frame(frame, frames_dir)}")
@@ -121,14 +143,18 @@ def replay(config, folder):
         sys.exit(f"No PNG files in {folder}")
 
     reader = minimap.MinimapReader(config["minimap"])
+    locator = player.PlayerLocator(config["player"])
     view = overlay.Overlay(config["overlay_scale"])
-    i = 0
+    i, shown = 0, None
     try:
         while True:
-            path, frame = frames[i]
-            lines, rects, points = minimap_view(reader.read(frame))
-            view.show(frame, [f"REPLAY {i + 1}/{len(frames)}", path.name] + lines,
-                      rects, points)
+            if shown != i:
+                # Detect once per frame shown, not on every redraw.
+                path, frame = frames[i]
+                lines, rects, points = detect(frame, reader, locator)
+                view.show(frame, [f"REPLAY {i + 1}/{len(frames)}", path.name] + lines,
+                          rects, points)
+                shown = i
             key = view.key(50)
             if key in (ord("n"), ord(" ")):
                 i = min(i + 1, len(frames) - 1)
