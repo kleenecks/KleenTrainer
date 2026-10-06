@@ -74,10 +74,17 @@ jump = "alt"
 [hotkeys]
 # Saves the current frame as a PNG in the run folder.
 save_frame = "delete"
-# Records the character's current minimap position as the safe spot.
+# Adds a safe spot at the character's current minimap position.
 mark_safe_spot = "home"
+# Removes the safe spot nearest the character.
+remove_safe_spot = "page_down"
 # Stops the bot (and from stage 7 releases all keys).
 kill = "end"
+
+[points]
+# Marking within this many minimap px of an existing safe spot moves that
+# spot instead of adding a new one.
+merge_distance = 5
 
 [log]
 # Seconds between status lines in run.log.

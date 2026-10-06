@@ -80,8 +80,22 @@ All numbers are starting values and live in the config.
 - Sweep: walk the whole bottom floor end to end when no mob is reachable. An
   end is reached when the minimap x stops changing while walking (the map's
   walls); then turn around. This must not count as movement stuck.
-- Marked points (v1): one safe spot, the minimap position where the
-  character rests, marked with the Home hotkey. Pre-mapped maps come later.
+- Marked points (v1): safe spots, minimap positions where the character can
+  rest (on the floor or on a platform). Home adds a spot at the character's
+  position, or moves an existing spot within 5 minimap px (config). Page Down
+  removes the spot nearest the character. When the bot needs to rest it goes
+  to the closest spot by walking distance: horizontal minimap distance to the
+  spot's takeoff point (or the spot itself before a route is known).
+  Pre-mapped maps come later.
+- Getting onto a platform spot: no marking; the bot searches. Walk to the
+  spot's x, try a jump straight up, then jumps toward the spot from takeoff
+  spots further out to each side (2 minimap px apart). After each landing
+  check the minimap height: at the spot's height = done; partway up (a
+  multi-jump route) = keep searching from there; back on the floor = next
+  takeoff spot. Give up after 20 tries (config): log and stop. The route that
+  worked (each takeoff x and jump direction) is saved with the spot in the
+  points file and reused; the search only runs again if it stops working.
+  Moving a spot clears its route.
 - Loot: tap the loot key during attacks and sweeps. After a kill, walk to the
   mob's last detected position while tapping loot, then pick the next target.
   Skip that walk when HP is low.
@@ -98,13 +112,16 @@ All numbers are starting values and live in the config.
 - Focus lost (client not in the foreground): full-screen screenshot, release
   all keys, console message, log entry, bring the client to the front and
   continue. Stop instead if Windows refuses the focus change, or if focus is
-  lost too many times in a row. Every client screenshot brings the client to
+  lost 3 times in a row (config; "in a row" = without a full minute of normal
+  running in between). Every client screenshot brings the client to
   the front first; the focus-lost full-screen screenshot is taken before
   refocusing, so it shows what took focus.
 - Minimap: only the normal-size expanded state counts as open. Large (the +
   button) and closed do not. In this client, closed leaves a bar with the map
-  name and the - (greyed), + and WORLD buttons; it never disappears fully. At startup, if not open, press the minimap key and check again; stop
-  if it is still not open. In stages 1 to 6 (no input), refuse to start with
+  name and the - (greyed), + and WORLD buttons; it never disappears fully.
+  The minimap key is M. M closes a large minimap. At startup, if not open,
+  press M and check again (if it was large: M twice, since the first press
+  closes it); stop if it is still not normal. In stages 1 to 6 (no input), refuse to start with
   a console message asking the user to open it. During a run, if the minimap
   is not found for 3 s, release keys, press the minimap key once, and stop
   if it is still not found 3 s later.
@@ -195,8 +212,10 @@ All numbers are starting values and live in the config.
 - Marked points in a JSON file, one per map: points/<map_name>.json (map_name
   in config), written by the point-marker hotkey.
 - Hotkeys (heard while the game is in front): Delete saves a frame, Home
-  marks the safe spot, End is the kill hotkey. The game's quick slots Del,
-  Hm and End must stay empty, since the game also receives these presses.
+  adds a safe spot, Page Down removes the nearest safe spot, End is the kill
+  hotkey. The game's quick slots Del, Hm, Pdn and End must stay empty, since
+  the game also receives these presses.
+- Movement keys: Left and Right arrows. Jump: Alt. Minimap: M.
 - One folder per run under runs/, named by start date and time, holding the
   log and screenshots. runs/ is git-ignored.
 
@@ -214,31 +233,27 @@ All numbers are starting values and live in the config.
   (duration, deaths seen, unexpected screens, frames saved).
 
 ## Open items (ask, do not guess)
-- Which skill; keybinds for attack, skill, loot, chair, minimap (jump is
-  Alt); attack range and facing
-- What the minimap key does when the minimap is large (switch to normal, or
-  close it so a second press is needed); check in-game before stage 7
+- Which skill; keybinds for attack, skill, loot, chair; attack range and
+  facing
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
-- Focus lost: how many times in a row before stopping (decide at stage 7)
 - How long the minimap x must stay unchanged to count as reaching the end of
   the floor (shorter than the 3 s stuck limit); decide at stage 9
 - Which mobs can reach the safe platform while resting (whether Red Snail or
   Orange Mushroom detection is needed for "hit while sitting"); decide at
   stage 10
 - Jump-over trigger distance
-- How the bot gets onto a safe spot on a platform: where on the floor to jump
-  from, which way, and how many jumps (e.g. mark a takeoff point too, or
-  search for it). v1 has no rope climbing, so the platform must be reachable
-  by jumping from the bottom floor. Decide at stage 7
 - Overnight PC settings: sleep, lock, updates, display scaling
 - From the admins: run report contents, whether the real server's client
   blocks synthetic input (the test server's does not), whether the real server's client runs as administrator (the test
   server's does)
 
 ## After v1
-Pre-mapped maps (sweep ends, several safe spots) and a map recorder with
-shareable map files in the project folders, rope climbing,
+Mapping as its own part of the tool, separate from the trainer: marking
+safe spots (and sweep ends, other points) moves there. The trainer detects
+which map it is on by itself and loads that map's safe spots, routes and
+mob list automatically. Map files are shareable, in the project folders.
+Rope climbing,
 randomized pathing, slow training mode, anti-detection (channel change, relog,
 map population check), EXP tracking. Pots and buffs: keys in the same config;
 buff recast automatic from the on-screen buff icon, matched to the specific

@@ -42,15 +42,14 @@ def parse_key(name):
     return getattr(keyboard.Key, name, None) or keyboard.KeyCode.from_char(name)
 
 
-def minimap_view(reading, safe_spot):
-    """Overlay text, boxes and points for a minimap reading. The safe spot,
-    if marked, is drawn as a small box on the minimap."""
+def minimap_view(reading, safe_spots):
+    """Overlay text, boxes and points for a minimap reading. Each marked safe
+    spot is drawn as a small box on the minimap."""
     if reading.state != "normal":
         return [f"minimap: {reading.state}"], [], []
     b = reading.bounds
     rects = [b]
-    if safe_spot:
-        sx, sy = safe_spot
+    for sx, sy in safe_spots:
         rects.append(capture.Region(b.x + sx - 4, b.y + sy - 4, 8, 8))
     if reading.dot is None:
         return [f"minimap: normal {b.width}x{b.height}, no dot"], rects, []
@@ -87,7 +86,7 @@ def bar_text(name, fill):
 
 
 class Detectors:
-    def __init__(self, config, event=print, safe_spot=None):
+    def __init__(self, config, event=print, safe_spots=()):
         """event is called with a message for each notable change."""
         self.minimap = minimap.MinimapReader(config["minimap"])
         self.player = player.PlayerLocator(config["player"])
@@ -97,7 +96,7 @@ class Detectors:
         self.hp_bar = config["status"]["hp_bar"]
         self.mp_bar = config["status"]["mp_bar"]
         self.event = event
-        self.safe_spot = safe_spot
+        self.safe_spots = list(safe_spots)
         self.was_dead = False
         self.last_unexpected = None
         self.deaths = 0
@@ -113,7 +112,7 @@ class Detectors:
         reading = self.minimap.read(frame)
         me = self.player.read(frame, now)
         found = self.mobs.detect(frame, me.feet[1]) if me.feet else []
-        for view in (minimap_view(reading, self.safe_spot), player_view(me),
+        for view in (minimap_view(reading, self.safe_spots), player_view(me),
                      mob_view(found, me.feet)):
             lines += view[0]
             rects += view[1]
@@ -167,7 +166,8 @@ def live(config):
 
     # Hotkeys are heard by a background listener; the main loop acts on them.
     hotkeys = config["hotkeys"]
-    requests = {name: threading.Event() for name in ("save_frame", "mark_safe_spot", "kill")}
+    requests = {name: threading.Event()
+                for name in ("save_frame", "mark_safe_spot", "remove_safe_spot", "kill")}
     keys = {parse_key(hotkeys[name]): name for name in requests}
 
     def on_press(key):
@@ -179,7 +179,7 @@ def live(config):
 
     map_name = config["map_name"]
     capturer = capture.Capturer(hwnd)
-    detectors = Detectors(config, log.event, points.load(map_name).get("safe_spot"))
+    detectors = Detectors(config, log.event, points.safe_spots(map_name))
     # Stages 1 to 6 send no input, so the bot cannot open the minimap itself.
     state = detectors.minimap.read(capturer.grab()).state
     if state != "normal":
@@ -221,11 +221,13 @@ def live(config):
                     print(f"Saved {capture.save_frame(frame, frames_dir)}")
                     saved += 1
                 if requests["mark_safe_spot"].is_set():
-                    mark_safe_spot(detectors, map_name, log)
+                    mark_safe_spot(detectors, map_name, config["points"]["merge_distance"], log)
+                if requests["remove_safe_spot"].is_set():
+                    remove_safe_spot(detectors, map_name, log)
             else:
                 mode = "PAUSED: client not in front"
-            requests["save_frame"].clear()
-            requests["mark_safe_spot"].clear()
+            for name in ("save_frame", "mark_safe_spot", "remove_safe_spot"):
+                requests[name].clear()
 
             if log.status_due():
                 log.event(detectors.status_line())
@@ -250,15 +252,37 @@ def live(config):
         log.close()
 
 
-def mark_safe_spot(detectors, map_name, log):
-    """Save the character's current minimap position as the safe spot."""
+def current_dot(detectors):
     reading = detectors.reading
-    if not reading or reading.state != "normal" or reading.dot is None:
+    if not reading or reading.state != "normal":
+        return None
+    return reading.dot
+
+
+def mark_safe_spot(detectors, map_name, merge_distance, log):
+    """Add a safe spot at the character's minimap position (or move the
+    existing spot right next to it)."""
+    dot = current_dot(detectors)
+    if dot is None:
         log.event("Safe spot not marked: the minimap dot is not visible.")
         return
-    path = points.save_safe_spot(map_name, reading.dot)
-    detectors.safe_spot = reading.dot
-    log.event(f"Safe spot marked at minimap {reading.dot} ({path.name}).")
+    action = points.add_safe_spot(map_name, dot, merge_distance)
+    detectors.safe_spots = points.safe_spots(map_name)
+    log.event(f"Safe spot {action} at minimap {dot}; {len(detectors.safe_spots)} marked.")
+
+
+def remove_safe_spot(detectors, map_name, log):
+    """Remove the safe spot nearest the character's minimap position."""
+    dot = current_dot(detectors)
+    if dot is None:
+        log.event("Safe spot not removed: the minimap dot is not visible.")
+        return
+    removed = points.remove_nearest_safe_spot(map_name, dot)
+    detectors.safe_spots = points.safe_spots(map_name)
+    if removed is None:
+        log.event("Safe spot not removed: none are marked.")
+    else:
+        log.event(f"Safe spot removed at minimap {removed}; {len(detectors.safe_spots)} left.")
 
 
 def replay(config, folder):
@@ -266,7 +290,7 @@ def replay(config, folder):
     if not frames:
         sys.exit(f"No PNG files in {folder}")
 
-    detectors = Detectors(config, safe_spot=points.load(config["map_name"]).get("safe_spot"))
+    detectors = Detectors(config, safe_spots=points.safe_spots(config["map_name"]))
     view = overlay.Overlay(config["overlay_scale"])
     i, shown = 0, None
     try:
