@@ -3,6 +3,9 @@
 # Exact text of the game client's title bar.
 window_title = "Kaizen v92"
 
+# Training map; marked points are saved in points/<map_name>.json.
+map_name = "henesys_hunting_ground_1"
+
 # Seconds to wait after bringing the client to the front before capturing.
 focus_settle_s = 0.5
 
@@ -71,3 +74,11 @@ jump = "alt"
 [hotkeys]
 # Saves the current frame as a PNG in the run folder.
 save_frame = "delete"
+# Records the character's current minimap position as the safe spot.
+mark_safe_spot = "home"
+# Stops the bot (and from stage 7 releases all keys).
+kill = "end"
+
+[log]
+# Seconds between status lines in run.log.
+status_interval_s = 60

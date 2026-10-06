@@ -3,12 +3,15 @@
   python main.py live [config.toml]      watch the client with the debug overlay
   python main.py replay FOLDER           step through saved frames
 
-Live: press the save-frame hotkey (config) in the game to save a PNG to the
-run folder. Pauses while the client is not in front. Quit with Ctrl+C in the
-terminal (or q in the separate overlay window, if that one is used).
+Live: hotkeys (config) work while the game is in front: save a frame as a
+PNG to the run folder, mark the safe spot at the character's minimap
+position, or stop (kill hotkey). Pauses while the client is not in front.
+Ctrl+C in the terminal also stops it (or q in the separate overlay window,
+if that one is used). Each run writes run.log in its run folder.
 Replay: in the overlay, n or space = next, p = previous, q = quit.
 """
 
+import json
 import sys
 import threading
 import time
@@ -23,6 +26,8 @@ import minimap
 import mobs
 import overlay
 import player
+import points
+import runlog
 import status
 import window
 
@@ -37,16 +42,21 @@ def parse_key(name):
     return getattr(keyboard.Key, name, None) or keyboard.KeyCode.from_char(name)
 
 
-def minimap_view(reading):
-    """Overlay text, boxes and points for a minimap reading."""
+def minimap_view(reading, safe_spot):
+    """Overlay text, boxes and points for a minimap reading. The safe spot,
+    if marked, is drawn as a small box on the minimap."""
     if reading.state != "normal":
         return [f"minimap: {reading.state}"], [], []
     b = reading.bounds
+    rects = [b]
+    if safe_spot:
+        sx, sy = safe_spot
+        rects.append(capture.Region(b.x + sx - 4, b.y + sy - 4, 8, 8))
     if reading.dot is None:
-        return [f"minimap: normal {b.width}x{b.height}, no dot"], [b], []
+        return [f"minimap: normal {b.width}x{b.height}, no dot"], rects, []
     dx, dy = reading.dot
     return ([f"minimap: normal {b.width}x{b.height}, dot ({dx}, {dy})"],
-            [b], [(b.x + dx, b.y + dy)])
+            rects, [(b.x + dx, b.y + dy)])
 
 
 def player_view(reading):
@@ -77,16 +87,24 @@ def bar_text(name, fill):
 
 
 class Detectors:
-    def __init__(self, config):
+    def __init__(self, config, event=print, safe_spot=None):
+        """event is called with a message for each notable change."""
         self.minimap = minimap.MinimapReader(config["minimap"])
         self.player = player.PlayerLocator(config["player"])
         self.unexpected = status.UnexpectedScreenWatch(config["status"])
         self.death = status.DeathDetector(config["status"])
         self.mobs = mobs.MobDetector(list(config["mobs"]), config["mob_detection"])
-        self.was_dead = False
         self.hp_bar = config["status"]["hp_bar"]
         self.mp_bar = config["status"]["mp_bar"]
+        self.event = event
+        self.safe_spot = safe_spot
+        self.was_dead = False
         self.last_unexpected = None
+        self.deaths = 0
+        self.unexpected_screens = 0
+        # Latest readings, for the status line and the safe-spot marker.
+        self.reading = None
+        self.hp = self.mp = None
 
     def run(self, frame, now=None):
         """Run every detector on frame; returns overlay lines, rects and points."""
@@ -95,29 +113,41 @@ class Detectors:
         reading = self.minimap.read(frame)
         me = self.player.read(frame, now)
         found = self.mobs.detect(frame, me.feet[1]) if me.feet else []
-        for view in (minimap_view(reading), player_view(me), mob_view(found, me.feet)):
+        for view in (minimap_view(reading, self.safe_spot), player_view(me),
+                     mob_view(found, me.feet)):
             lines += view[0]
             rects += view[1]
             points += view[2]
-        lines.append(bar_text("HP", status.bar_fill(frame, self.hp_bar)) + ", " +
-                     bar_text("MP", status.bar_fill(frame, self.mp_bar)))
+        self.reading = reading
+        self.hp = status.bar_fill(frame, self.hp_bar)
+        self.mp = status.bar_fill(frame, self.mp_bar)
+        lines.append(bar_text("HP", self.hp) + ", " + bar_text("MP", self.mp))
 
         # The bot only watches in stages 1 to 6, so an unexpected screen is
-        # shown and printed rather than stopping anything.
+        # shown and logged rather than stopping anything.
         reason = self.unexpected.update(reading, now)
         if reason:
             lines.insert(0, f"UNEXPECTED SCREEN: {reason}")
             if self.last_unexpected is None:
-                print(f"Unexpected screen: {reason}")
+                self.unexpected_screens += 1
+                self.event(f"Unexpected screen: {reason}")
+        elif self.last_unexpected:
+            self.event("Screen back to normal.")
         self.last_unexpected = reason
 
         dead = self.death.is_dead(frame)
         if dead:
             lines.insert(0, "DEAD")
             if not self.was_dead:
-                print("Death detected.")
+                self.deaths += 1
+                self.event("Death detected.")
         self.was_dead = dead
         return lines, rects, points
+
+    def status_line(self):
+        dot = self.reading.dot if self.reading else None
+        where = f"minimap {dot}" if dot else "minimap position unknown"
+        return f"Status: {where}, {bar_text('HP', self.hp)}, {bar_text('MP', self.mp)}, state watching"
 
 
 def live(config):
@@ -132,24 +162,31 @@ def live(config):
     run_dir = Path("runs") / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_dir.mkdir(parents=True)
     frames_dir = run_dir / "frames"
+    log = runlog.RunLog(run_dir, config["log"]["status_interval_s"])
+    log.event(f"Run start. Config: {json.dumps(config)}")
 
-    save_requested = threading.Event()
-    save_key = parse_key(config["hotkeys"]["save_frame"])
+    # Hotkeys are heard by a background listener; the main loop acts on them.
+    hotkeys = config["hotkeys"]
+    requests = {name: threading.Event() for name in ("save_frame", "mark_safe_spot", "kill")}
+    keys = {parse_key(hotkeys[name]): name for name in requests}
 
     def on_press(key):
-        if key == save_key:
-            save_requested.set()
+        if key in keys:
+            requests[keys[key]].set()
 
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
 
+    map_name = config["map_name"]
     capturer = capture.Capturer(hwnd)
-    detectors = Detectors(config)
+    detectors = Detectors(config, log.event, points.load(map_name).get("safe_spot"))
     # Stages 1 to 6 send no input, so the bot cannot open the minimap itself.
     state = detectors.minimap.read(capturer.grab()).state
     if state != "normal":
         capturer.close()
         listener.stop()
+        log.event(f"Stop: the minimap is {state} at startup.")
+        log.close()
         sys.exit(f"The minimap is {state}. Open it at normal size "
                  "(not large, not closed) and run again.")
 
@@ -161,39 +198,67 @@ def live(config):
     window.bring_to_front(hwnd, config["focus_settle_s"])
     interval = 1 / config["capture_fps"]
     frame = None
+    saved = 0
+    stop_reason = "overlay closed"
     print(f"Run folder: {run_dir}")
-    print("Watching. Press Ctrl+C here to quit.")
+    print(f"Watching. Press {hotkeys['kill']} (kill hotkey) or Ctrl+C here to stop.")
 
     try:
         while True:
             started = time.perf_counter()
+            if requests["kill"].is_set():
+                stop_reason = "kill hotkey"
+                break
             if not window.find_window(config["window_title"]):
-                print("The client window closed.")
+                stop_reason = "client window closed"
                 break
 
             if window.is_foreground(hwnd):
                 frame = capturer.grab()
-                lines, rects, points = detectors.run(frame)
+                lines, rects, pts = detectors.run(frame)
                 mode = "LIVE"
-                if save_requested.is_set():
+                if requests["save_frame"].is_set():
                     print(f"Saved {capture.save_frame(frame, frames_dir)}")
+                    saved += 1
+                if requests["mark_safe_spot"].is_set():
+                    mark_safe_spot(detectors, map_name, log)
             else:
                 mode = "PAUSED: client not in front"
-            save_requested.clear()
+            requests["save_frame"].clear()
+            requests["mark_safe_spot"].clear()
+
+            if log.status_due():
+                log.event(detectors.status_line())
 
             if frame is not None:
                 h, w = frame.shape[:2]
-                view.show(frame, [mode, f"client {w}x{h}"] + lines, rects, points)
+                view.show(frame, [mode, f"client {w}x{h}"] + lines, rects, pts)
 
             wait = max(1, int((interval - (time.perf_counter() - started)) * 1000))
             if view.key(wait) == ord("q") or view.is_closed():
                 break
     except KeyboardInterrupt:
-        print("Stopped.")
+        stop_reason = "Ctrl+C"
     finally:
+        # From stage 7 the kill hotkey also releases all keys here.
         listener.stop()
         capturer.close()
         view.close()
+        log.event(f"Stop: {stop_reason}.")
+        log.event(f"Summary: duration {log.duration()}, deaths seen {detectors.deaths}, "
+                  f"unexpected screens {detectors.unexpected_screens}, frames saved {saved}.")
+        log.close()
+
+
+def mark_safe_spot(detectors, map_name, log):
+    """Save the character's current minimap position as the safe spot."""
+    reading = detectors.reading
+    if not reading or reading.state != "normal" or reading.dot is None:
+        log.event("Safe spot not marked: the minimap dot is not visible.")
+        return
+    path = points.save_safe_spot(map_name, reading.dot)
+    detectors.safe_spot = reading.dot
+    log.event(f"Safe spot marked at minimap {reading.dot} ({path.name}).")
 
 
 def replay(config, folder):
@@ -201,7 +266,7 @@ def replay(config, folder):
     if not frames:
         sys.exit(f"No PNG files in {folder}")
 
-    detectors = Detectors(config)
+    detectors = Detectors(config, safe_spot=points.load(config["map_name"]).get("safe_spot"))
     view = overlay.Overlay(config["overlay_scale"])
     i, shown = 0, None
     try:

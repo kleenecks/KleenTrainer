@@ -75,9 +75,13 @@ MP low is not a state. It only changes which attack is used.
 ## Behavior details
 All numbers are starting values and live in the config.
 - Target: nearest reachable mob. Reachable = feet at the same height as the
-  character on screen within a tolerance, and inside the marked left and right
-  ends of the sweep area.
-- Sweep: walk the flat area end to end when no mob is reachable.
+  character on screen within a tolerance. v1 has no marked sweep ends, so the
+  whole bottom floor counts.
+- Sweep: walk the whole bottom floor end to end when no mob is reachable. An
+  end is reached when the minimap x stops changing while walking (the map's
+  walls); then turn around. This must not count as movement stuck.
+- Marked points (v1): one safe spot, the minimap position where the
+  character rests, marked with the Home hotkey. Pre-mapped maps come later.
 - Loot: tap the loot key during attacks and sweeps. After a kill, walk to the
   mob's last detected position while tapping loot, then pick the next target.
   Skip that walk when HP is low.
@@ -165,7 +169,8 @@ All numbers are starting values and live in the config.
 - Live loop timing (test laptop): about 90 ms per frame, of which screen
   capture is about 45 ms and HP/MP/death about 17 ms.
 - The overlay marks reachable mobs and boxes the target the bot would pick
-  (nearest reachable mob; the sweep-area ends come in stage 6).
+  (nearest reachable mob), and draws the safe spot as a small box on the
+  minimap.
 - Stages 1 to 6 are validated with the user playing. The debug overlay shows
   detections and, from stage 5, what the bot would do.
 - Frames can be saved and replayed so detection is testable without the game.
@@ -175,7 +180,8 @@ All numbers are starting values and live in the config.
   - game (default): a see-through, click-through window drawn directly over
     the client. It is excluded from screen capture (Windows 10 2004+), so the
     bot never sees its own drawings, and it never takes focus. Status text is
-    at the top right. Quit with Ctrl+C in the terminal.
+    at the top right. Stop with the kill hotkey (End) or Ctrl+C in the
+    terminal.
   - window: a separate OpenCV window showing a scaled copy of the frame,
     placed beside the client. Replay always uses this one.
 - The live watch loop pauses while the client is not in front and does not
@@ -186,7 +192,11 @@ All numbers are starting values and live in the config.
 - Settings in config.toml: window title, keybinds stored by action name (attack, skill,
   loot, chair, jump, minimap), thresholds, intervals. Hand-edited now. A GUI will edit
   the same file later.
-- Marked points in a JSON file, one per map, written by the point-marker hotkey.
+- Marked points in a JSON file, one per map: points/<map_name>.json (map_name
+  in config), written by the point-marker hotkey.
+- Hotkeys (heard while the game is in front): Delete saves a frame, Home
+  marks the safe spot, End is the kill hotkey. The game's quick slots Del,
+  Hm and End must stay empty, since the game also receives these presses.
 - One folder per run under runs/, named by start date and time, holding the
   log and screenshots. runs/ is git-ignored.
 
@@ -198,6 +208,10 @@ All numbers are starting values and live in the config.
   reason, and a status line every minute (position, HP %, MP %, state).
 - Summary at stop: duration, rests, stuck events, attack count.
 - No per-keypress logging.
+- The log is run.log in the run folder; lines are also printed. In stages 1
+  to 6 it records run start, unexpected screens, deaths, safe spot marked,
+  the status line every minute (state "watching") and a summary at stop
+  (duration, deaths seen, unexpected screens, frames saved).
 
 ## Open items (ask, do not guess)
 - Which skill; keybinds for attack, skill, loot, chair, minimap (jump is
@@ -207,19 +221,24 @@ All numbers are starting values and live in the config.
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
 - Focus lost: how many times in a row before stopping (decide at stage 7)
-- Points to mark and their hotkeys; kill hotkey; which safe zone when several
+- How long the minimap x must stay unchanged to count as reaching the end of
+  the floor (shorter than the 3 s stuck limit); decide at stage 9
 - Which mobs can reach the safe platform while resting (whether Red Snail or
   Orange Mushroom detection is needed for "hit while sitting"); decide at
   stage 10
 - Jump-over trigger distance
-- Points file name
+- How the bot gets onto a safe spot on a platform: where on the floor to jump
+  from, which way, and how many jumps (e.g. mark a takeoff point too, or
+  search for it). v1 has no rope climbing, so the platform must be reachable
+  by jumping from the bottom floor. Decide at stage 7
 - Overnight PC settings: sleep, lock, updates, display scaling
 - From the admins: run report contents, whether the real server's client
   blocks synthetic input (the test server's does not), whether the real server's client runs as administrator (the test
   server's does)
 
 ## After v1
-Map recorder with shareable map files in the project folders, rope climbing,
+Pre-mapped maps (sweep ends, several safe spots) and a map recorder with
+shareable map files in the project folders, rope climbing,
 randomized pathing, slow training mode, anti-detection (channel change, relog,
 map population check), EXP tracking. Pots and buffs: keys in the same config;
 buff recast automatic from the on-screen buff icon, matched to the specific
