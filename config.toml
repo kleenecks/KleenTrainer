@@ -125,10 +125,10 @@ edge_margin = 20
 [rest]
 # HP % below which the bot goes to rest (stage 10); the loot walk after a
 # kill is skipped below it.
-hp_low_percent = 90
+hp_low_percent = 25
 # HP % that counts as full: the bot gets up (the bar reading can stop a
 # hair short of 100).
-hp_full_percent = 95
+hp_full_percent = 98
 # On the way to rest, jump when a mob is within this many screen px ahead.
 jump_over_px = 60
 # Being hit blocks the chair for a while: sit only once HP has not dropped
@@ -147,7 +147,7 @@ exit_timeout_s = 4
 [attack]
 # Attack when the target's feet are within this many screen px (left or
 # right) of the character's feet. 90 hit; raised to try further out.
-range_px = 130
+range_px = 140
 # Once attacking, keep at it while the target is within the range plus this
 # many px (stops the attack/walk flip-flop at the edge of range).
 hold_margin_px = 10
@@ -163,12 +163,18 @@ retarget_margin_px = 100
 # Target choice: the lowest-HP mob (read from the HP bar shown above hurt
 # mobs) among those at most this many screen px farther than the nearest.
 prefer_hurt_within_px = 300
-# Side choice: each mob weighs (2 - HP share) / (1 + distance / this), and
+# Side choice: each mob weighs (1 + wound_weight * HP lost) / (1 + distance
+# / this), and
 # the bot goes to the side (left/right) whose mobs weigh more. Smaller =
 # closeness matters more; larger = numbers matter more. At 150, one mob
 # 30 px away beats two at 200 and 300 px, and five at 400-800 px beat one
 # 50 px away.
 side_falloff_px = 150
+# How much more a wounded mob counts: a mob weighs 1 + this * its share of
+# HP lost (a nearly dead mob counts 1 + this unhurt ones), and the extra
+# distance allowed for preferring it grows by up to half this times
+# prefer_hurt_within_px. 1 made low-HP mobs lose to others too often.
+wound_weight = 4
 # Lead the target by this many seconds while walking toward it: the bot acts
 # on slightly old frames, so it starts attacking when the gap expected this
 # much later is in range. 0 = no prediction (attack only when actually in

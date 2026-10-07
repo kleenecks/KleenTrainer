@@ -80,7 +80,7 @@ def player_view(reading):
     return [f"player: {reading.status}{score}, feet ({x}, {y})"], [], [reading.feet]
 
 
-def mob_view(found, feet, prefer_px, falloff):
+def mob_view(found, feet, prefer_px, falloff, wound_weight):
     """Overlay text, boxes and points for reachable mobs. The box marks the
     target the bot would pick (trainer.pick_target: the heavier side, then
     the lowest HP unless much farther than the nearest)."""
@@ -88,7 +88,7 @@ def mob_view(found, feet, prefer_px, falloff):
         return ["mobs: no player position"], [], []
     if not found:
         return ["mobs: none reachable"], [], []
-    target = trainer.pick_target(found, feet, prefer_px, falloff)
+    target = trainer.pick_target(found, feet, prefer_px, falloff, wound_weight)
     tx, ty = target.feet
     box = capture.Region(tx - 30, ty - 60, 60, 64)
     return ([f"mobs: {len(found)} reachable, target {target.name} at ({tx}, {ty}), "
@@ -111,6 +111,7 @@ class Detectors:
         self.mp_bar = config["status"]["mp_bar"]
         self.prefer_hurt_px = config["attack"]["prefer_hurt_within_px"]
         self.side_falloff = config["attack"]["side_falloff_px"]
+        self.wound_weight = config["attack"]["wound_weight"]
         self.event = event
         self.safe_spots = list(safe_spots)
         self.was_dead = False
@@ -137,7 +138,7 @@ class Detectors:
         if found:
             mobs.attach_hp(found, frame, me.feet[1])
         for view in (minimap_view(reading, self.safe_spots), player_view(me),
-                     mob_view(found, me.feet, self.prefer_hurt_px, self.side_falloff)):
+                     mob_view(found, me.feet, self.prefer_hurt_px, self.side_falloff, self.wound_weight)):
             lines += view[0]
             rects += view[1]
             points += view[2]

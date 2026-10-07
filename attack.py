@@ -62,12 +62,18 @@ class Attacker:
         return reading.dot[0] * self.screen_per_minimap
 
     def set_target(self, mob, feet):
-        """Start fighting mob (from the detectors)."""
-        self.target = self.here() + mob.feet[0] - feet[0]
+        """Start fighting mob (from the detectors). Returns False (and does
+        nothing) if the minimap dot is not visible this frame: map positions
+        need it."""
+        here = self.here()
+        if here is None:
+            return False
+        self.target = here + mob.feet[0] - feet[0]
         self.target_y = mob.feet[1]
         self.target_seen = time.monotonic()
         self.target_dx = mob.feet[0] - feet[0]
         self.closing = 0.0
+        return True
 
     def _track(self, found, feet, here):
         """Find the target among the detected mobs and update it. Returns
@@ -98,8 +104,13 @@ class Attacker:
         feet = d.me.feet if d.me else None
         here = self.here()
         if feet is None or here is None:
+            # A frame without the name tag or the minimap dot (briefly
+            # covered): keep doing what it was doing, so a swing is not cut
+            # short; give up only if it lasts.
+            if time.monotonic() - self.target_seen <= self.lost_s:
+                return "fighting"
             self.stop()
-            return "fighting" if time.monotonic() - self.target_seen <= self.lost_s else "lost"
+            return "lost"
 
         dx = self._track(d.found, feet, here)
         unseen = time.monotonic() - self.target_seen

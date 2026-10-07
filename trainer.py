@@ -36,28 +36,35 @@ ON_TOP_PX = 30
 FLOOR_SCAN_PX = 60
 
 
-def side_weight(mobs, feet, falloff):
+def side_weight(mobs, feet, falloff, wound_weight):
     """How much a group of mobs pulls the character: each mob weighs
-    (2 - HP share) / (1 + distance / falloff), so close mobs weigh more,
-    far ones less, and wounded ones up to double."""
-    return sum((2 - m.hp) / (1 + abs(m.feet[0] - feet[0]) / falloff) for m in mobs)
+    (1 + wound_weight * HP lost) / (1 + distance / falloff), so close mobs
+    weigh more, far ones less, and wounded ones much more (a nearly dead mob
+    counts 1 + wound_weight unhurt ones)."""
+    return sum((1 + wound_weight * (1 - m.hp)) / (1 + abs(m.feet[0] - feet[0]) / falloff)
+               for m in mobs)
 
 
-def pick_target(mobs, feet, prefer_px, falloff):
+def pick_target(mobs, feet, prefer_px, falloff, wound_weight):
     """The mob to fight. First the side: the side (left or right of the
     character) whose mobs weigh more (side_weight), so a crowd farther away
-    can outweigh a single close mob, and a very close mob outweighs a
-    couple of distant ones. Then on that side: the lowest-HP mob
-    (mobs.attach_hp; unhurt = 1.0) among those at most prefer_px farther
-    than the nearest there, nearest first among equals."""
+    can outweigh a single close mob, a very close mob outweighs a couple of
+    distant ones, and badly wounded mobs pull hard. Then on that side: the
+    lowest-HP mob (mobs.attach_hp; unhurt = 1.0) among those not much
+    farther than the nearest there: prefer_px, growing with the mob's HP
+    lost (up to prefer_px * (1 + wound_weight / 2) for a nearly dead one);
+    nearest first among equals."""
     def distance(m):
         return abs(m.feet[0] - feet[0])
     left = [m for m in mobs if m.feet[0] < feet[0]]
     right = [m for m in mobs if m.feet[0] >= feet[0]]
     if left and right:
-        mobs = left if side_weight(left, feet, falloff) > side_weight(right, feet, falloff) else right
+        heavier_left = (side_weight(left, feet, falloff, wound_weight)
+                        > side_weight(right, feet, falloff, wound_weight))
+        mobs = left if heavier_left else right
     nearest = min(distance(m) for m in mobs)
-    candidates = [m for m in mobs if distance(m) <= nearest + prefer_px]
+    candidates = [m for m in mobs
+                  if distance(m) <= nearest + prefer_px * (1 + wound_weight / 2 * (1 - m.hp))]
     return min(candidates, key=lambda m: (m.hp, distance(m)))
 
 
@@ -75,6 +82,7 @@ class Trainer:
         self.retarget_margin = config["attack"]["retarget_margin_px"]
         self.prefer_hurt_px = config["attack"]["prefer_hurt_within_px"]
         self.side_falloff = config["attack"]["side_falloff_px"]
+        self.wound_weight = config["attack"]["wound_weight"]
         self.target_hp = 1.0
         self.no_progress_s = config["movement"]["no_progress_s"]
         self.k = config["map"]["screen_px_per_minimap_px"]
@@ -156,7 +164,7 @@ class Trainer:
                 return
 
         if mobs and feet:
-            self._fight(pick_target(mobs, feet, self.prefer_hurt_px, self.side_falloff), feet)
+            self._fight(pick_target(mobs, feet, self.prefer_hurt_px, self.side_falloff, self.wound_weight), feet)
             return
         self._sweep()
 
@@ -188,7 +196,8 @@ class Trainer:
         return limits[0] <= mob_x <= limits[1]
 
     def _fight(self, mob, feet):
-        self.attacker.set_target(mob, feet)
+        if not self.attacker.set_target(mob, feet):
+            return      # no minimap dot this frame: try again next frame
         self.target_hp = mob.hp
         if mob.hp < 1:
             self.log.event(f"Target: {mob.name} at {mob.hp:.0%} HP, "
@@ -372,8 +381,8 @@ class Trainer:
             return None
         left = [m for m in found if m.feet[0] < feet[0]]
         right = [m for m in found if m.feet[0] >= feet[0]]
-        heavier = ("left" if side_weight(left, feet, self.side_falloff)
-                   > side_weight(right, feet, self.side_falloff) else "right")
+        heavier = ("left" if side_weight(left, feet, self.side_falloff, self.wound_weight)
+                   > side_weight(right, feet, self.side_falloff, self.wound_weight) else "right")
         self.log.event(f"Mobs on the floor: {len(left)} left, {len(right)} right.")
         return heavier
 
@@ -426,8 +435,9 @@ class Trainer:
         """A mob reached the character at the safe spot: kill it."""
         d = self.session.detectors
         mob = min(d.found, key=lambda m: abs(m.feet[0] - feet[0]))
+        if not self.attacker.set_target(mob, feet):
+            return      # no minimap dot this frame: try again next frame
         self.log.event(f"Mob at the safe spot ({mob.name}); getting up to fight it.")
-        self.attacker.set_target(mob, feet)
         while self.attacker.step() == "fighting":
             self.session.tick()
         self.attacker.stop()

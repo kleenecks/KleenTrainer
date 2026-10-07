@@ -121,17 +121,17 @@ All numbers are starting values and live in the config.
   short.
 - Fight and loot loop (trainer.py, rebuilt simply after the rule-on-rule
   version got erratic): (1) no target and no loot waiting: first the side:
-  each reachable mob weighs (2 - HP share) / (1 + distance / 150 px)
-  (config side_falloff_px), and the bot goes to the side (left or right)
+  each reachable mob weighs (1 + 4 x HP lost) / (1 + distance / 150 px)
+  (config wound_weight, side_falloff_px; a nearly dead mob counts as 5
+  unhurt ones; with 1, low-HP mobs were ignored for others in the game), and the bot goes to the side (left or right)
   whose mobs weigh more, so a crowd farther away outweighs a single close
   mob, and a very close mob outweighs a couple of distant ones (one at
   30 px beats two at 200 and 300 px; five at 400-800 px beat one at 50 px).
   Then on that side: the lowest-HP mob among those at most 300 screen px
-  (config prefer_hurt_within_px) farther than the nearest there, nearest
+  (config prefer_hurt_within_px; growing with HP lost, up to 900 px for a
+  nearly dead mob) farther than the nearest there, nearest
   first among equals (mobs take several hits, so wounded ones get finished
-  off, but not by walking across the map). A wounded mob nearby can lose
-  to a crowd on the other side (60% HP at 81 px vs six unhurt to the
-  right); raise its weight if that should not happen. (2) fight it until it
+  off, but not by walking across the map). (2) fight it until it
   is dead; while still walking to it, a mob 100 screen px (config
   retarget_margin_px) closer, no healthier and in the direction of travel
   takes over and the far target is forgotten (e.g. mobs spawning nearer);
@@ -219,6 +219,11 @@ All numbers are starting values and live in the config.
   noticeable, detecting the death animation would make it instant). Not
   seen for 0.5 s otherwise (config lost_s): given up. Each change of action
   can be logged (config debug_log).
+- Frames without the minimap dot or the name tag (briefly covered, e.g. the
+  dot under a portal icon): no new fight is started (map positions need the
+  dot; starting one crashed an early overnight test), and an ongoing fight
+  keeps its current action for up to 0.5 s instead of letting go of the
+  attack key.
 - Dropped in the rebuild (they interfered with each other): following a
   lost target for 1.5 s, the 0.4 s keep-attacking timer, and the separate
   stacked-mob rule. Switching to a closer mob while walking came back as
@@ -241,6 +246,10 @@ All numbers are starting values and live in the config.
   green-dominant, not bright. ~1-2 ms per frame. Region capture's strip
   reaches 130 px above the feet to include the bars. The overlay shows the
   target's HP.
+- Known issue (test server): near the signpost, its tooltip ("Henesys / Hill
+  West of Henesys ...") covers part of the screen and makes detection
+  unreliable there. May not occur on the real server. Possibly shown on
+  mouse hover rather than by the character's position; untested.
 - Known limitation, accepted for v1: a mob that spawns on top of the
   character is hidden by the character's body, weapon and effects and is
   not detected until it steps out. A prototype scoring only pixels outside
@@ -425,6 +434,8 @@ All numbers are starting values and live in the config.
   and End empty, character on the bottom floor.
 - config.toml: [attack] debug_log = false (otherwise run.log gets a line per
   attack decision all night).
+- Park the mouse cursor over a harmless spot (e.g. the chat or status bar):
+  tooltips such as the signpost's may appear on mouse hover (untested).
 - Run python main.py train from an administrator terminal, then leave the
   game in front and do not touch the PC.
 
