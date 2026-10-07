@@ -118,6 +118,9 @@ class Detectors:
         self.me = None
         self.found = []
         self.hp = self.mp = None
+        # False when this frame's capture left out the HP/MP bars and the
+        # death dialog (region capture): keep the last readings.
+        self.read_slow = True
 
     def run(self, frame, now=None):
         """Run every detector on frame; returns overlay lines, rects and points."""
@@ -134,8 +137,9 @@ class Detectors:
         self.reading = reading
         self.me = me
         self.found = found
-        self.hp = status.bar_fill(frame, self.hp_bar)
-        self.mp = status.bar_fill(frame, self.mp_bar)
+        if self.read_slow:
+            self.hp = status.bar_fill(frame, self.hp_bar)
+            self.mp = status.bar_fill(frame, self.mp_bar)
         lines.append(bar_text("HP", self.hp) + ", " + bar_text("MP", self.mp))
 
         # The bot only watches in stages 1 to 6, so an unexpected screen is
@@ -150,7 +154,7 @@ class Detectors:
             self.event("Screen back to normal.")
         self.last_unexpected = reason
 
-        dead = self.death.is_dead(frame)
+        dead = self.death.is_dead(frame) if self.read_slow else self.was_dead
         if dead:
             lines.insert(0, "DEAD")
             if not self.was_dead:
@@ -230,6 +234,8 @@ class Session:
         self.reopen_tried = False
         self.attacker = None   # set by tasks that fight, for the summary
         self.state = "moving" if input_on else "watching"   # for the status line
+        self.last_full = 0.0   # when the last full frame was captured
+        self.slow_count = 0    # frames since the bars and death dialog were captured
         self.started = time.perf_counter()
         print(f"Run folder: {self.run_dir}")
         print(f"Press {hotkeys['kill']} (kill hotkey) or Ctrl+C here to stop.")
@@ -250,7 +256,7 @@ class Session:
 
         lines, rects, pts = [], [], []
         if window.is_foreground(self.hwnd):
-            self.frame = self.capturer.grab()
+            self.frame = self._grab()
             lines, rects, pts = self.detectors.run(self.frame)
             self._hotkeys()
             if self.input_on:
@@ -269,6 +275,48 @@ class Session:
             raise Stopped("overlay closed")
         self.started = time.perf_counter()
         return self.detectors.reading
+
+    def _grab(self):
+        """Capture what the detectors need. Usually only regions: a strip
+        around the character's feet spanning the whole width (mobs far left
+        and right included), the minimap, the HP/MP bars and the death-dialog
+        area. A full frame when something must be searched for again (name
+        tag or minimap not tracked), for a saved frame, for the separate
+        overlay window, and every full_every_s as a safety net."""
+        c = self.config["capture"]
+        d = self.detectors
+        now = time.monotonic()
+        reading, me = d.reading, d.me
+        if (not c["regions"] or self.config["overlay"] == "window"
+                or self.requests["save_frame"].is_set()
+                or reading is None or reading.state != "normal" or reading.bounds is None
+                or me is None or me.feet is None
+                or now - self.last_full >= c["full_every_s"]):
+            self.last_full = now
+            d.read_slow = True
+            return self.capturer.grab()
+
+        feet_y = me.feet[1]
+        # Above the feet: the tallest mob sprite plus the mob search margins;
+        # below: the name tag and its tracking margin.
+        above = d.mobs.reach_up + c["strip_margin"]
+        below = player.TAG_TO_FEET_Y + player.TRACK_MARGIN + d.player.letters.shape[0] + c["strip_margin"]
+        b = reading.bounds
+        regions = [
+            capture.Region(0, feet_y - above, 1 << 16, above + below),        # full width
+            capture.Region(0, 0, b.x + b.width + 40, b.y + b.height + 40),   # minimap and buttons
+        ]
+        # Each capture call costs about 6 ms on top of its pixels, so the HP/MP
+        # bars and the death dialog (which need no 10-per-second checking) are
+        # only captured every slow_every frames; in between the detectors keep
+        # their last readings.
+        self.slow_count = (self.slow_count + 1) % c["slow_every"]
+        self.detectors.read_slow = self.slow_count == 0
+        if self.detectors.read_slow:
+            hp, mp = d.hp_bar, d.mp_bar
+            regions += [capture.Region(hp[0] - 5, hp[2] - 5, mp[1] - hp[0] + 10, 11),
+                        d.death.area]
+        return self.capturer.grab_regions(regions)
 
     def _hotkeys(self):
         if self.requests["save_frame"].is_set():
@@ -321,7 +369,7 @@ class Session:
 
     def close(self, reason):
         if self.keys:
-            self.keys.release_all()
+            self.keys.close()
         self.listener.stop()
         self.capturer.close()
         self.view.close()

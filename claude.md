@@ -104,21 +104,30 @@ All numbers are starting values and live in the config.
   px to avoid overshooting, stop within 1 px. No progress for 3 s = the walk
   fails. A jump has landed when the minimap height has not changed for 3
   readings, at least 0.3 s after the jump.
-- Loot is secondary to fighting and never stops the character. The loot key
-  (Z) is held whenever the character walks (to a target, sweeping, on a loot
-  pass) and is never tapped; it is not pressed while attacking. Windows does
-  not auto-repeat keys held by a program, and picking up reacts to each
-  key-down, so while Z is held its key-down is re-sent every loop step
-  (about 10 times a second) without releasing it. After a
-  kill: a loot pass, walking with Z held the way the character faced while
-  attacking (the drops are in front of it; a mob dying on top of the
-  character gives no reliable side), through the spot where the mob died
-  (0 if it was behind or on top) and 40 screen px (config; 60 went too far)
-  past it, then straight on to the next target, without stopping. Each pass
-  is logged. Skipped when HP is below 25%. A kill
-  = a target that disappears while the bot was attacking it. Its screen
-  position is turned into a minimap x with 16.2 screen px per minimap px (config [map]; from the map data: minimap area 2317 game px wide shown
-  as 214 minimap px, times the 1.5x stretch).
+- Fight and loot loop (trainer.py, rebuilt simply after the rule-on-rule
+  version got erratic): (1) no target and no loot waiting: pick the closest
+  reachable mob; (2) fight it until it is dead; while still walking to it, a
+  mob 100 screen px (config retarget_margin_px) closer takes over and the
+  far target is forgotten (e.g. mobs spawning nearer); once attacking, the
+  target is kept; (3) loot: walk with Z held
+  through every spot where a mob died and 40 screen px (config loot
+  past_px) beyond the furthest, in the direction of the drops (the way the
+  character faces if they are right under it); (4) a mob between the
+  character and the loot (or on top of the character) is fought first, then
+  the walk goes on and collects both drops, which also covers stacked mobs;
+  (5) nothing to fight or loot: sweep. Looting is skipped when HP is below
+  25%. Each kill and each finished loot walk is logged.
+- The loot key (Z) is held whenever the character walks (to a target,
+  looting, sweeping) and is never tapped or pressed while attacking. Windows
+  does not auto-repeat keys held by a program, and picking up reacts to each
+  key-down, so while Z is held a background thread re-sends its key-down
+  about 30 times a second without releasing it (once per loop step missed
+  loot).
+- Drop and mob positions are kept as map positions in screen px (minimap x
+  times 16.2 screen px per minimap px, plus the screen offset), so camera
+  movement does not shift them. 16.2 (config [map]) is from the map data:
+  minimap area 2317 game px wide shown as 214 minimap px, times the 1.5x
+  stretch.
 - Sweep wall time: the minimap x unchanged for 1 s while sweeping = a wall.
 - Edge margins: the bot stays 20 minimap px (config) away from each side of
   the minimap's map area, since the character gets lost at the very edges.
@@ -136,16 +145,44 @@ All numbers are starting values and live in the config.
   jump fails, keep going.
 - Hit while sitting: kill the mob, sit again.
 - MP: below 10% use basic attacks. Resume the skill above 50%.
-- Attack (v1 for now: basic attack only, key Ctrl; the skill and the
-  warrior's values come later). Target = nearest reachable mob, then sticky:
-  the bot stays on it until it has not been seen for 0.5 s (config; killed or
-  gone). Shorter gaps, e.g. hidden behind loot, keep the target. While
-  walking to an out-of-range target, a mob closer by more than 40 screen px
-  (config) takes over; a target in range is never switched. Out of range:
-  walk toward it. Facing away (the character faces
+- Attack (attack.py; v1 for now: basic attack only, key Ctrl; the skill and
+  the warrior's values come later). One target at a time, given by the
+  trainer. Out of range: walk toward it. Facing away (the character faces
   the way it last moved): tap the arrow toward it. In range and facing it:
-  hold Ctrl (the game repeats the swing) until the target is gone or out of
-  range. Range: screen px between the feet (config). 90 hit; now trying 120.
+  hold Ctrl (the game repeats the swing). Range: screen px between the feet
+  (config range_px; 90 hit, 120-150 tried, now 130 set by the user). While
+  walking in, the range check can lead the target (config lead_s; frames
+  are about 0.2 s old by the time a key takes effect). A 0.2 s lead stopped
+  the character walking into approaching mobs but sometimes started swings
+  that missed completely; now 0 (no prediction) to compare. Once attacking
+  it keeps at it while the target is within the range plus 10 px (config
+  hold_margin_px), so stopping to swing does not flip it back to walking.
+  The target is recognized from frame to frame by its map position, so
+  camera movement or a slow frame does not lose it. Dead = seen during the
+  attack, then unseen for 0.2 s (config target_lost_s; a dying mob vanishes
+  from detection, so this is also the pause after a kill; if still
+  noticeable, detecting the death animation would make it instant). Not
+  seen for 0.5 s otherwise (config lost_s): given up. Each change of action
+  can be logged (config debug_log).
+- Dropped in the rebuild (they interfered with each other): following a
+  lost target for 1.5 s, the 0.4 s keep-attacking timer, and the separate
+  stacked-mob rule. Switching to a closer mob while walking came back as
+  the single retarget rule above, with a larger margin (100 px, was 40).
+- Partly covered mobs: a mob that fails the normal match is still accepted
+  if at least 80% of its solid pixels match (config min_match_share; each
+  pixel within 30 per color channel). Measured: Blue Snails under a portal
+  tooltip 0.97 (now found), mobs half behind another mob, the character's
+  weapon or an item (now found), a Red Snail against the Blue Snail sprite
+  0.68 (still rejected). Still missed: a Shroom 40% under loot (0.59, below
+  the Red Snail, so no single cutoff separates them) and a mob being hit
+  behind the character and swing effects (0.06-0.18).
+- Known limitation, accepted for v1: a mob that spawns on top of the
+  character is hidden by the character's body, weapon and effects and is
+  not detected until it steps out. A prototype scoring only pixels outside
+  the character's box failed (hidden mobs 39-57, empty spots 37-63; ~60 ms
+  per frame). A possible fallback, not built: HP dropping with no mob
+  detected nearby = a hidden mob touching the character; swing facing,
+  then turn.
 - Movement stuck: movement keys sent but minimap position unchanged for 3 s.
   Recovery: jump, then walk the opposite way for 1 s and retry. After 3 failed
   attempts, stop and log with a screenshot.
@@ -226,8 +263,17 @@ All numbers are starting values and live in the config.
   are used. A rough half-size grayscale pass on just that strip picks
   candidates, grouped per mob and spot; an exact color pass confirms each
   group. Matches run in parallel threads. About 14 ms typical, 32 ms busy.
-- Live loop timing (test laptop): about 90 ms per frame, of which screen
-  capture is about 45 ms and HP/MP/death about 17 ms.
+- Live loop timing (test laptop): about 90 ms per frame with full-frame
+  capture, of which capture was about 35-45 ms. Capture (mss) costs about
+  6 ms per call plus its pixels (full frame ~34 ms, the full-width strip
+  ~12 ms), so region capture (config [capture]) grabs only the strip around
+  the feet (whole width, so distant mobs are seen) and the minimap every
+  frame, plus the HP/MP bars and death dialog every 5th frame: ~26 ms per
+  frame. A full frame is still taken when the name tag or minimap must be
+  searched for again, for saved frames, for the window overlay, and every
+  second. The frame rate cap is 20 (capture_fps) so the loop does not idle
+  between frames. A much faster capture would need Windows' GPU capture
+  (e.g. the dxcam package; a new dependency, not checked on Python 3.14).
 - The overlay marks reachable mobs and boxes the target the bot would pick
   (nearest reachable mob), and draws the safe spot as a small box on the
   minimap.
@@ -272,6 +318,7 @@ All numbers are starting values and live in the config.
   reason, and a status line every minute (position, HP %, MP %, state).
 - Summary at stop: duration, rests, stuck events, attack count.
 - No per-keypress logging.
+- Log timestamps have milliseconds (to time short pauses).
 - The log is run.log in the run folder; lines are also printed. In stages 1
   to 6 it records run start, unexpected screens, deaths, safe spot marked,
   the status line every minute (state "watching") and a summary at stop

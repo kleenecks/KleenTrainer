@@ -1,120 +1,154 @@
-"""Attack: fight reachable mobs with the basic attack.
+"""Fight one target with the basic attack until it is dead.
 
-The target sticks: once picked (the nearest reachable mob), the bot stays on
-it until it has not been seen for a short while (killed or gone); a brief
-gap, e.g. the mob hidden behind loot, does not count. Then the nearest
-reachable mob becomes the next target. While walking to an out-of-range
-target, a clearly closer mob takes over.
+The trainer picks the target (a mob's feet on screen) and calls step() every
+frame. Out of range: walk toward it. In range but facing away: tap the arrow
+toward it. In range and facing it: hold the attack key (the game repeats the
+swing). The character faces the way it last moved.
 
-Each step: out of range, walk toward the target on screen. In range but
-facing away, tap the arrow toward it to turn. In range and facing it, hold
-the attack key (the game repeats the swing). The character faces the way it
-last moved.
+The target is recognized from frame to frame by its map position (minimap x
+when seen, plus its screen offset), so camera movement does not lose it. It
+is dead once it has been seen during the attack and then not seen for
+target_lost_s (a dying mob vanishes from detection). A target not seen for
+lost_s otherwise is given up.
 
 Range is the horizontal distance in screen px between the character's feet
-and the mob's feet.
+and the mob's feet. The bot acts on frames that are already a little old, so
+while walking toward the target it starts attacking when the gap expected
+lead_s later is in range. Once attacking it keeps at it while the target is
+within the range plus hold_margin_px, so stopping to swing does not flip it
+straight back to walking.
 """
 
 import time
 
-# The same mob in the next frame is within this many screen px of where it
-# was (mobs move slowly; the camera can shift a little).
+# The same mob is within this many screen px of where its last-seen map
+# position puts it now, plus MOB_SPEED_PX_S for each second since it was
+# last seen (mobs keep walking; a little above their walking speed).
 SAME_TARGET_PX = 40
+MOB_SPEED_PX_S = 150
 
 
 class Attacker:
     def __init__(self, session, config):
+        c = config["attack"]
         self.session = session
         self.keys = session.keys
-        self.range = config["attack"]["range_px"]
-        self.target_lost_s = config["attack"]["target_lost_s"]
+        self.range = c["range_px"]
+        self.hold_margin = c["hold_margin_px"]
+        self.lead_s = c["lead_s"]
+        self.target_lost_s = c["target_lost_s"]
+        self.lost_s = c["lost_s"]
+        self.debug = c["debug_log"]
+        self.screen_per_minimap = config["map"]["screen_px_per_minimap_px"]
         self.facing = None        # "left"/"right" once known
         self.attacking = False
+        self.attack_started = 0.0
         self.attacks = 0          # times an attack was started (for the summary)
-        self.switch_margin = config["attack"]["switch_margin_px"]
-        self.target = None        # last known feet of the current target
+        self.last_action = None
+        self.target = None        # map position of the target (screen px)
+        self.target_y = 0
         self.target_seen = 0.0
-        # Where the target was last seen, as an offset from the character's
-        # feet (screen px) and the minimap x at that moment.
-        self.target_dx = 0
-        self.target_dot_x = None
-        # Set when an attacked target disappears (taken as a kill): its last
-        # known screen dx and minimap x, and the facing while attacking. The
-        # trainer reads and clears it.
-        self.kill = None
-        # Optional filter: allowed(screen dx from the feet) -> whether a mob
-        # there may become a target (e.g. inside the map's edge margins).
-        self.allowed = None
+        self.target_dx = 0        # its offset from the feet when last seen
+        self.closing = 0.0        # how fast the gap is closing (screen px/s)
 
-    def _seen(self, mob_feet, feet, now):
-        self.target, self.target_seen = mob_feet, now
-        self.target_dx = mob_feet[0] - feet[0]
+    # --- target ------------------------------------------------------------
+
+    def here(self):
+        """The character's map position in screen px (minimap x times screen
+        px per minimap px), or None without a minimap reading."""
         reading = self.session.detectors.reading
-        self.target_dot_x = reading.dot[0] if reading and reading.dot else None
-
-    def _pick_target(self, found, feet):
-        """The current target if it is still there, else the nearest mob.
-        While the target is out of range (the bot is walking to it), a mob
-        closer by more than the switch margin takes over."""
-        now = time.monotonic()
-        if self.allowed:
-            found = [m for m in found if self.allowed(m.feet[0] - feet[0])]
-        if self.target:
-            same = [m for m in found
-                    if abs(m.feet[0] - self.target[0]) <= SAME_TARGET_PX
-                    and abs(m.feet[1] - self.target[1]) <= SAME_TARGET_PX]
-            if same:
-                mob = min(same, key=lambda m: abs(m.feet[0] - self.target[0]))
-                self._seen(mob.feet, feet, now)
-                distance = abs(mob.feet[0] - feet[0])
-                if distance > self.range:
-                    nearest = min(found, key=lambda m: abs(m.feet[0] - feet[0]))
-                    if abs(nearest.feet[0] - feet[0]) + self.switch_margin < distance:
-                        self._seen(nearest.feet, feet, now)
-                return self.target
-            if now - self.target_seen <= self.target_lost_s:
-                return self.target          # briefly hidden: keep at it
-            self.target = None
-            if self.attacking and self.target_dot_x is not None:
-                # A kill: report it with the facing while attacking, and pick
-                # no new target this step (the trainer loots first).
-                self.kill = (self.target_dx, self.target_dot_x, self.facing)
-                return None
-        if not found:
+        if not reading or not reading.dot:
             return None
-        mob = min(found, key=lambda m: abs(m.feet[0] - feet[0]))
-        self._seen(mob.feet, feet, now)
-        return mob.feet
+        return reading.dot[0] * self.screen_per_minimap
+
+    def set_target(self, mob, feet):
+        """Start fighting mob (from the detectors)."""
+        self.target = self.here() + mob.feet[0] - feet[0]
+        self.target_y = mob.feet[1]
+        self.target_seen = time.monotonic()
+        self.target_dx = mob.feet[0] - feet[0]
+        self.closing = 0.0
+
+    def _track(self, found, feet, here):
+        """Find the target among the detected mobs and update it. Returns
+        its screen offset from the feet if seen this frame, else None."""
+        now = time.monotonic()
+        expected_dx = self.target - here
+        reach = SAME_TARGET_PX + MOB_SPEED_PX_S * (now - self.target_seen)
+        same = [m for m in found
+                if abs(m.feet[0] - feet[0] - expected_dx) <= reach
+                and abs(m.feet[1] - self.target_y) <= SAME_TARGET_PX]
+        if not same:
+            return None
+        mob = min(same, key=lambda m: abs(m.feet[0] - feet[0] - expected_dx))
+        dx = mob.feet[0] - feet[0]
+        if now > self.target_seen:
+            closing = (abs(self.target_dx) - abs(dx)) / (now - self.target_seen)
+            self.closing = 0.5 * self.closing + 0.5 * closing
+        self.target, self.target_seen, self.target_dx = here + dx, now, dx
+        return dx
+
+    # --- fighting ------------------------------------------------------------
 
     def step(self):
-        """One fight step on the latest detector readings (the caller ticks
-        the session first). Returns True while there is a target."""
+        """One fight step on the latest readings (the caller ticks the
+        session first). Returns "fighting", "dead" (killed; the target's map
+        position stays in self.target) or "lost"."""
         d = self.session.detectors
         feet = d.me.feet if d.me else None
-        target = self._pick_target(d.found, feet) if feet else None
-        if target is None:
-            self._stop_attacking()
-            self._stop_walking()
-            return False
+        here = self.here()
+        if feet is None or here is None:
+            self.stop()
+            return "fighting" if time.monotonic() - self.target_seen <= self.lost_s else "lost"
 
-        dx = target[0] - feet[0]
+        dx = self._track(d.found, feet, here)
+        unseen = time.monotonic() - self.target_seen
+        if dx is None:
+            if self.attacking and self.target_seen >= self.attack_started:
+                if unseen > self.target_lost_s:
+                    self.stop()
+                    self._note("killed", self.target - here)
+                    return "dead"
+                return "fighting"           # briefly hidden: keep swinging
+            if unseen > self.lost_s:
+                self.stop()
+                self._note("lost", self.target - here)
+                return "lost"
+            dx = round(self.target - here)  # keep going to where it was
+
         toward = "right" if dx > 0 else "left"
+        if self.attacking:
+            in_range = abs(dx) <= self.range + self.hold_margin
+        else:
+            # Lead the target while closing in (frames are a little old).
+            in_range = abs(dx) - max(self.closing, 0.0) * self.lead_s <= self.range
 
-        if abs(dx) > self.range:
+        if not in_range:
             self._stop_attacking()
             self._walk(toward)
-            return True
+            self._note(f"walk {toward}", dx)
+            return "fighting"
 
         self._stop_walking()
         if dx != 0 and self.facing != toward:
             self._stop_attacking()
             self.keys.tap(toward)
             self.facing = toward
+            self._note(f"turn {toward}", dx)
         if not self.attacking:
             self.keys.hold("attack")
             self.attacking = True
+            self.attack_started = time.monotonic()
             self.attacks += 1
-        return True
+            self._note("attack", dx)
+        return "fighting"
+
+    def _note(self, action, dx):
+        """Decision log (config debug_log): one line per change of action."""
+        if self.debug and action != self.last_action:
+            self.session.log.event(f"Attack: {action}; target dx {round(dx)}, "
+                                   f"closing {self.closing:.0f} px/s.")
+        self.last_action = action
 
     def _walk(self, direction):
         other = "left" if direction == "right" else "right"
@@ -134,8 +168,3 @@ class Attacker:
     def stop(self):
         self._stop_attacking()
         self._stop_walking()
-
-    def reset(self):
-        """Stop attacking and forget the target (e.g. before a loot pass)."""
-        self._stop_attacking()
-        self.target = None

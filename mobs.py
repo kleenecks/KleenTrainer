@@ -68,6 +68,8 @@ class MobDetector:
         self.tolerance = config["height_tolerance"]
         self.max_rms = config["max_rms"]
         self.rough_max_rms = config["rough_max_rms"]
+        self.min_match_share = config["min_match_share"]
+        self.pixel_tolerance = config["pixel_tolerance"]
         self.exact = []    # (rough template, [exact templates]) per sprite and facing
         for name in mob_names:
             for path in sorted((TEMPLATES / name).glob("*.png")):
@@ -174,7 +176,20 @@ class MobDetector:
                 continue
             rms, _, at, _ = cv2.minMaxLoc(self._match(window, t))
             mob_feet = (x0 + at[0] + t.image.shape[1] // 2, y0 + at[1] + t.feet)
-            if rms <= self.max_rms and abs(mob_feet[1] - feet_y) <= self.tolerance:
-                if best is None or rms < best.rms:
-                    best = Mob(t.name, mob_feet, rms)
+            if abs(mob_feet[1] - feet_y) > self.tolerance:
+                continue
+            if rms > self.max_rms and not self._mostly_matches(window, t, at):
+                continue
+            if best is None or rms < best.rms:
+                best = Mob(t.name, mob_feet, rms)
         return best
+
+    def _mostly_matches(self, window, t, at):
+        """Whether most of the sprite's solid pixels match at `at`. Covers a
+        mob partly hidden (by a tooltip, loot, an effect): the hidden part
+        raises the average difference, but the rest still matches."""
+        h, w = t.mask.shape
+        crop = window[at[1]:at[1] + h, at[0]:at[0] + w].astype(np.int16)
+        diff = np.abs(crop - t.image.astype(np.int16)).max(2)
+        solid = t.mask > 0
+        return (diff[solid] < self.pixel_tolerance).mean() >= self.min_match_share

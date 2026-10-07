@@ -1,25 +1,30 @@
-"""The training loop (stage 9: fight, loot, sweep; resting comes in stage 10).
+"""The training loop (resting comes in stage 10).
 
-Looting rides along with moving: the loot key is held whenever the character
-walks (to a target, sweeping, on a loot pass) and is never tapped. Held keys
-sent by a program are not auto-repeated by Windows, and picking up reacts to
-each key-down, so the key-down is re-sent every loop step while held. After a
-kill, the character walks without stopping through the spot where the mob
-died and about one mob's width past it, holding the loot key, then goes on
-to the next target.
+1. Hunt: no target and no loot waiting: pick the closest reachable mob.
+2. Fight it until it is dead (attack.py). While still walking to it, a mob
+   that is retarget_margin_px closer takes over (e.g. mobs spawning nearer
+   than a far target); once attacking, the target is kept.
+3. Loot: walk with the loot key held through every spot where a mob died
+   and loot_past_px beyond the furthest. A mob between the character and
+   the loot is fought first (back to 2), then the walk goes on and collects
+   both drops.
+4. Nothing to fight or loot: sweep the bottom floor, turning at the walls
+   and at the edge margins.
 
-Each step, on the latest readings:
-1. A loot pass is under way: keep walking until past its end.
-2. A kill just happened: start a loot pass (skipped when HP is low).
-3. A target: fight it (attack.py).
-4. Otherwise sweep: walk the bottom floor and turn around when the minimap x
-   has not changed for the wall time.
+The loot key is held whenever the character walks and is never tapped.
+Held keys sent by a program are not auto-repeated by Windows, and picking up
+reacts to each key-down, so keys.hold_repeating re-sends the key-down about
+30 times a second. Mobs beyond the edge margins are not fought.
 """
 
 import time
 
 import attack
 import movement
+
+# A mob this close (screen px) counts as on top of the character, on either
+# side, so it is "in the way" of loot in either direction.
+ON_TOP_PX = 30
 
 
 class Trainer:
@@ -31,16 +36,19 @@ class Trainer:
         session.attacker = self.attacker
         self.mover = movement.Mover(session, config)
         self.wall_s = config["sweep"]["wall_s"]
-        self.loot_past_px = config["loot"]["past_px"]
-        self.no_progress_s = config["movement"]["no_progress_s"]
-        self.screen_per_minimap = config["map"]["screen_px_per_minimap_px"]
-        self.hp_low = config["rest"]["hp_low_percent"]
         self.edge_margin = config["sweep"]["edge_margin"]
-        self.attacker.allowed = self._inside_margins
-        self.direction = "left"
-        self.sweep_x = None       # minimap x when it last changed while sweeping
+        self.loot_past_px = config["loot"]["past_px"]
+        self.retarget_margin = config["attack"]["retarget_margin_px"]
+        self.no_progress_s = config["movement"]["no_progress_s"]
+        self.k = config["map"]["screen_px_per_minimap_px"]
+        self.hp_low = config["rest"]["hp_low_percent"]
+        self.fighting = False
+        self.loot = []            # map positions (screen px) of uncollected drops
+        self.loot_dir = None      # "left"/"right" while walking to loot
+        self.loot_moved = (None, 0.0)   # last map x while looting, and when it changed
+        self.direction = "left"   # sweep direction
+        self.sweep_x = None
         self.sweep_moved = 0.0
-        self.loot_pass = None     # [end minimap x, direction, last x, when x last changed]
         self.state = None
 
     def run(self):
@@ -50,24 +58,53 @@ class Trainer:
             self.step()
 
     def step(self):
-        if self.loot_pass:
-            self._continue_loot_pass()
-            return
-        has_target = self.attacker.step()
-        if self.attacker.kill:
-            dx, dot_x, facing = self.attacker.kill
-            self.attacker.kill = None
-            if self._start_loot_pass(dx, dot_x, facing):
+        d = self.session.detectors
+        feet = d.me.feet if d.me else None
+        here = self.attacker.here()
+        mobs = [m for m in d.found if feet and self._inside_margins(m, feet)]
+
+        if self.fighting and not self.attacker.attacking and feet and here is not None:
+            # Still walking to the target: a mob that spawned (or walked)
+            # clearly closer takes over, and the far target is forgotten.
+            target_dx = abs(self.attacker.target - here)
+            closer = [m for m in mobs
+                      if abs(m.feet[0] - feet[0]) + self.retarget_margin < target_dx]
+            if closer:
+                mob = min(closer, key=lambda m: abs(m.feet[0] - feet[0]))
+                self.log.event(f"Closer mob {abs(mob.feet[0] - feet[0])} px away; "
+                               f"dropping the target {round(target_dx)} px away.")
+                self._fight(mob, feet)
                 return
-        if has_target:
-            self._set_state("fighting")
-            self.sweep_x = None
-            if self.attacker.attacking:
-                self.keys.release("loot")
-            else:
-                self.keys.hold_repeating("loot")     # walking to the target
+
+        if self.fighting:
+            result = self.attacker.step()
+            if result == "fighting":
+                self._set_state("fighting")
+                if self.attacker.attacking:
+                    self.keys.release("loot")
+                else:
+                    self.keys.hold_repeating("loot")   # walking to the target
+                return
+            self.fighting = False
+            if result == "dead" and not self._hp_low():
+                self.loot.append(self.attacker.target)
+                self.log.event(f"Killed; {len(self.loot)} drop(s) to collect.")
+
+        if self.loot and here is not None:
+            # A mob between the character and the loot: fight it first.
+            in_way = [m for m in mobs if self._in_way(m.feet[0] - feet[0], here)]
+            if in_way:
+                self._fight(min(in_way, key=lambda m: abs(m.feet[0] - feet[0])), feet)
+                return
+            if self._walk_to_loot(here):
+                return
+
+        if mobs and feet:
+            self._fight(min(mobs, key=lambda m: abs(m.feet[0] - feet[0])), feet)
             return
         self._sweep()
+
+    # --- helpers --------------------------------------------------------------
 
     def _set_state(self, state):
         if state != self.state:
@@ -75,77 +112,87 @@ class Trainer:
             self.state = state
             self.session.state = state
 
-    def _dot_x(self):
-        reading = self.session.detectors.reading
-        return reading.dot[0] if reading and reading.dot else None
+    def _hp_low(self):
+        hp = self.session.detectors.hp
+        return hp is not None and hp < self.hp_low
 
     def _limits(self):
         """Lowest and highest minimap x the bot goes to: the minimap's map
         area minus the edge margin on each side."""
         reading = self.session.detectors.reading
-        width = reading.bounds.width if reading and reading.bounds else None
-        if width is None:
+        if not reading or not reading.bounds:
             return None
-        return self.edge_margin, width - self.edge_margin
+        return self.edge_margin, reading.bounds.width - self.edge_margin
 
-    def _inside_margins(self, mob_dx):
-        """Whether a mob mob_dx screen px from the feet is inside the edge
-        margins (for the attacker's target choice)."""
-        x, limits = self._dot_x(), self._limits()
-        if x is None or limits is None:
+    def _inside_margins(self, mob, feet):
+        here, limits = self.attacker.here(), self._limits()
+        if here is None or limits is None:
             return True
-        mob_x = x + mob_dx / self.screen_per_minimap
+        mob_x = (here + mob.feet[0] - feet[0]) / self.k
         return limits[0] <= mob_x <= limits[1]
 
-    def _start_loot_pass(self, dx, dot_x, facing):
-        """Begin walking through the kill spot and a little past it, the way
-        the character faced while attacking (the drops are in front of it).
-        dx is the mob's last screen offset from the feet, dot_x the minimap x
-        at that moment. Returns False if skipped (HP low)."""
-        hp = self.session.detectors.hp
-        if hp is not None and hp < self.hp_low:
-            return False
-        direction = facing or ("right" if dx >= 0 else "left")
-        sign = 1 if direction == "right" else -1
-        # How far the mob was in front of the character (0 if behind or on
-        # top of it), plus the distance past it.
-        ahead = max(dx * sign, 0)
-        distance = ahead + self.loot_past_px
-        start_x = self._dot_x()
-        if start_x is None:
-            start_x = dot_x
-        end_x = round(start_x + sign * distance / self.screen_per_minimap)
+    def _fight(self, mob, feet):
+        self.attacker.set_target(mob, feet)
+        self.fighting = True
+        self._set_state("fighting")
+        self.attacker.step()
+        if not self.attacker.attacking:
+            self.keys.hold_repeating("loot")   # walking to the target
+
+    # --- loot -----------------------------------------------------------------
+
+    def _loot_goal(self, here):
+        """(direction, map position to walk to): beyond the furthest drop,
+        in the direction of the drops (the way the character faces if they
+        are right under it)."""
+        if self.loot_dir is None:
+            furthest = max(self.loot, key=lambda s: abs(s - here))
+            if abs(furthest - here) <= ON_TOP_PX:
+                self.loot_dir = self.attacker.facing or "right"
+            else:
+                self.loot_dir = "right" if furthest > here else "left"
+        sign = 1 if self.loot_dir == "right" else -1
+        goal = max(s * sign for s in self.loot) * sign + sign * self.loot_past_px
         limits = self._limits()
         if limits:
-            end_x = max(limits[0], min(limits[1], end_x))
-        self.attacker.reset()   # stop attacking; pick a fresh target afterwards
-        self.loot_pass = [end_x, direction, start_x, time.monotonic()]
-        self._set_state("looting")
-        self.log.event(f"Loot pass: mob died {ahead} px ahead ({direction}); "
-                       f"walking {distance} px, minimap x {start_x} -> {end_x}.")
-        self._continue_loot_pass()
-        return True
+            goal = max(limits[0] * self.k, min(limits[1] * self.k, goal))
+        return self.loot_dir, goal
 
-    def _continue_loot_pass(self):
-        end_x, direction, last_x, moved_at = self.loot_pass
-        x = self._dot_x()
+    def _in_way(self, dx, here):
+        """Whether a mob dx screen px from the feet is between the character
+        and the loot goal (or on top of the character)."""
+        direction, goal = self._loot_goal(here)
+        sign = 1 if direction == "right" else -1
+        return abs(dx) <= ON_TOP_PX or 0 <= dx * sign <= (goal - here) * sign
+
+    def _walk_to_loot(self, here):
+        """Walk toward the loot goal with the loot key held. Returns False
+        once it is reached (the drops are collected) or progress stops."""
+        direction, goal = self._loot_goal(here)
+        sign = 1 if direction == "right" else -1
         now = time.monotonic()
-        if x is not None and x != last_x:
-            self.loot_pass[2:] = [x, now]
-        passed = x is not None and (x >= end_x if direction == "right" else x <= end_x)
-        if passed or now - moved_at > self.no_progress_s:
-            self.loot_pass = None     # no stop: the next step picks a target
+        last_x, moved_at = self.loot_moved
+        if last_x is None or here != last_x:
+            self.loot_moved = (here, now)
+        if here * sign >= goal * sign or now - self.loot_moved[1] > self.no_progress_s:
+            self.log.event(f"Loot collected ({len(self.loot)} drop(s)).")
+            self.loot, self.loot_dir, self.loot_moved = [], None, (None, 0.0)
             self.sweep_x = None
-            return
+            return False
+        self._set_state("looting")
         self.attacker._walk(direction)
         self.keys.hold_repeating("loot")
+        return True
+
+    # --- sweep ----------------------------------------------------------------
 
     def _sweep(self):
         self._set_state("sweeping")
-        x = self._dot_x()
-        if x is None:
+        reading = self.session.detectors.reading
+        if not reading or not reading.dot:
             self.attacker.stop()
             return
+        x = reading.dot[0]
         now = time.monotonic()
         limits = self._limits()
         if limits and self.direction == "left" and x <= limits[0]:

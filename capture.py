@@ -28,11 +28,34 @@ class Capturer:
     def __init__(self, hwnd):
         self.hwnd = hwnd
         self.sct = mss.MSS()
+        self.canvas = None
 
     def grab(self):
         # Look up the client area every time, so moving the window is fine.
         shot = self.sct.grab(window.client_area(self.hwnd))
         return np.array(shot)[:, :, :3]  # BGRA -> BGR
+
+    def grab_regions(self, regions):
+        """A client-sized frame where only the given Regions are captured and
+        the rest is black. Capturing is the slowest step of the loop and its
+        cost grows with the pixels copied, so this is much faster than grab()
+        while frame positions keep their meaning. The returned array is
+        reused by the next call."""
+        area = window.client_area(self.hwnd)
+        w, h = area["width"], area["height"]
+        if self.canvas is None or self.canvas.shape[:2] != (h, w):
+            self.canvas = np.zeros((h, w, 3), np.uint8)
+        else:
+            self.canvas[:] = 0
+        for r in regions:
+            x0, y0 = max(r.x, 0), max(r.y, 0)
+            x1, y1 = min(r.x + r.width, w), min(r.y + r.height, h)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            shot = self.sct.grab({"left": area["left"] + x0, "top": area["top"] + y0,
+                                  "width": x1 - x0, "height": y1 - y0})
+            self.canvas[y0:y1, x0:x1] = np.array(shot)[:, :, :3]
+        return self.canvas
 
     def close(self):
         self.sct.close()

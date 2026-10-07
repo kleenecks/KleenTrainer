@@ -9,14 +9,32 @@ map_name = "henesys_hunting_ground_1"
 # Seconds to wait after bringing the client to the front before capturing.
 focus_settle_s = 0.5
 
-# Live loop: frames captured per second.
-capture_fps = 10
+# Live loop: at most this many frames per second. The loop waits out the
+# rest of each frame's time before capturing the next, and anything that
+# happens during that wait is seen late; at 20 the loop (about 60-70 ms per
+# frame) runs as fast as it can.
+capture_fps = 20
 
 # Live debug overlay: "game" draws directly over the client; "window" shows
 # a scaled copy in a separate window (replay always uses the window).
 overlay = "game"
 # Separate overlay window size relative to the client (0.5 = half size).
 overlay_scale = 0.4
+
+[capture]
+# Capture only the regions the detectors read (a full-width strip around the
+# character's feet, the minimap, the HP/MP bars, the death-dialog area)
+# instead of the whole client: capture is the slowest step. A full frame is
+# still taken when the name tag or minimap must be searched for again, and
+# every full_every_s seconds.
+regions = true
+full_every_s = 1.0
+# Extra rows (px) above and below the strip's computed height.
+strip_margin = 20
+# Each capture call costs ~6 ms on top of its pixels: the HP/MP bars and the
+# death dialog are only captured every this many frames (about twice a
+# second at 10 frames per second).
+slow_every = 5
 
 [minimap]
 # Lowest match score (0 to 1) for the - / + / WORLD buttons to count as found.
@@ -66,6 +84,13 @@ max_rms = 12
 # Looser limit for the rough half-size pass that picks candidates. Real mobs
 # score up to about 39 there, spots without mobs 43 and up.
 rough_max_rms = 45
+# A mob partly covered (tooltip, loot, effects) fails max_rms but is still
+# accepted if at least this share of its pixels match (each within
+# pixel_tolerance per color channel). Snails under a tooltip: 0.97; a Red
+# Snail against the Blue Snail sprite: 0.68 (must fail); a Shroom 40%
+# under loot: 0.59 (still missed).
+min_match_share = 0.8
+pixel_tolerance = 30
 
 [keys]
 # Game keybinds by action, as pydirectinput key names.
@@ -103,13 +128,27 @@ hp_low_percent = 25
 [attack]
 # Attack when the target's feet are within this many screen px (left or
 # right) of the character's feet. 90 hit; raised to try further out.
-range_px = 120
-# The target counts as gone (killed or lost) after this many seconds unseen;
-# shorter gaps (e.g. hidden behind loot) keep the same target.
-target_lost_s = 0.5
-# While walking to an out-of-range target, switch to a mob that is closer by
-# more than this many screen px. A target in range is never switched.
-switch_margin_px = 40
+range_px = 130
+# Once attacking, keep at it while the target is within the range plus this
+# many px (stops the attack/walk flip-flop at the edge of range).
+hold_margin_px = 10
+# While attacking, the target counts as dead after this many seconds unseen
+# (a dying mob vanishes from detection); shorter gaps keep swinging.
+target_lost_s = 0.2
+# A target not seen for this many seconds while walking to it is given up.
+lost_s = 0.5
+# While walking to the target (not yet attacking), a mob at least this many
+# screen px closer takes over and the far target is forgotten.
+retarget_margin_px = 100
+# Lead the target by this many seconds while walking toward it: the bot acts
+# on slightly old frames, so it starts attacking when the gap expected this
+# much later is in range. 0 = no prediction (attack only when actually in
+# range). 0.2 sometimes started swings that missed completely; trying 0.
+lead_s = 0
+# Log each change of the attacker's action (walk, turn, attack, killed,
+# lost) with the measured gap, to diagnose odd behavior. Off for overnight
+# runs.
+debug_log = true
 
 [movement]
 # All distances in minimap px.

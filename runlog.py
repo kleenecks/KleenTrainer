@@ -15,7 +15,8 @@ class RunLog:
         self.next_status = self.started + status_interval_s
 
     def event(self, message):
-        line = f"{datetime.now():%Y-%m-%d %H:%M:%S} {message}"
+        now = datetime.now()
+        line = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d} {message}"
         self.file.write(line + "\n")
         self.file.flush()
         print(line)
