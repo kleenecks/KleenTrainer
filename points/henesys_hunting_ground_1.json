@@ -2,13 +2,14 @@
   "safe_spots": [
     {
       "spot": [
-        42,
+        43,
         128
       ],
       "route": [
         {
-          "takeoff_x": 42,
-          "direction": null,
+          "takeoff_x": 46,
+          "direction": "left",
+          "running": true,
           "lands_y": 128
         }
       ]

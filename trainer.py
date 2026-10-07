@@ -1,6 +1,9 @@
 """The training loop (resting comes in stage 10).
 
-1. Hunt: no target and no loot waiting: pick the closest reachable mob.
+1. Hunt: no target and no loot waiting: go to the side (left or right) whose
+   mobs weigh more (more mobs, closer, more wounded), then pick the
+   lowest-HP mob there unless it is much farther than the nearest
+   (pick_target).
 2. Fight it until it is dead (attack.py). While still walking to it, a mob
    that is retarget_margin_px closer takes over (e.g. mobs spawning nearer
    than a far target); once attacking, the target is kept.
@@ -10,6 +13,8 @@
    both drops.
 4. Nothing to fight or loot: sweep the bottom floor, turning at the walls
    and at the edge margins.
+Above all of these: HP below hp_low_percent -> rest (go to the closest safe
+spot, jumping over mobs in the way, sit on the chair until HP is full).
 
 The loot key is held whenever the character walks and is never tapped.
 Held keys sent by a program are not auto-repeated by Windows, and picking up
@@ -27,6 +32,31 @@ import movement
 ON_TOP_PX = 30
 
 
+def side_weight(mobs, feet, falloff):
+    """How much a group of mobs pulls the character: each mob weighs
+    (2 - HP share) / (1 + distance / falloff), so close mobs weigh more,
+    far ones less, and wounded ones up to double."""
+    return sum((2 - m.hp) / (1 + abs(m.feet[0] - feet[0]) / falloff) for m in mobs)
+
+
+def pick_target(mobs, feet, prefer_px, falloff):
+    """The mob to fight. First the side: the side (left or right of the
+    character) whose mobs weigh more (side_weight), so a crowd farther away
+    can outweigh a single close mob, and a very close mob outweighs a
+    couple of distant ones. Then on that side: the lowest-HP mob
+    (mobs.attach_hp; unhurt = 1.0) among those at most prefer_px farther
+    than the nearest there, nearest first among equals."""
+    def distance(m):
+        return abs(m.feet[0] - feet[0])
+    left = [m for m in mobs if m.feet[0] < feet[0]]
+    right = [m for m in mobs if m.feet[0] >= feet[0]]
+    if left and right:
+        mobs = left if side_weight(left, feet, falloff) > side_weight(right, feet, falloff) else right
+    nearest = min(distance(m) for m in mobs)
+    candidates = [m for m in mobs if distance(m) <= nearest + prefer_px]
+    return min(candidates, key=lambda m: (m.hp, distance(m)))
+
+
 class Trainer:
     def __init__(self, session, config):
         self.session = session
@@ -39,9 +69,18 @@ class Trainer:
         self.edge_margin = config["sweep"]["edge_margin"]
         self.loot_past_px = config["loot"]["past_px"]
         self.retarget_margin = config["attack"]["retarget_margin_px"]
+        self.prefer_hurt_px = config["attack"]["prefer_hurt_within_px"]
+        self.side_falloff = config["attack"]["side_falloff_px"]
+        self.target_hp = 1.0
         self.no_progress_s = config["movement"]["no_progress_s"]
         self.k = config["map"]["screen_px_per_minimap_px"]
         self.hp_low = config["rest"]["hp_low_percent"]
+        self.hp_full = config["rest"]["hp_full_percent"]
+        self.jump_over_px = config["rest"]["jump_over_px"]
+        self.chair_wait_s = config["rest"]["chair_wait_s"]
+        self.chair_check_s = config["rest"]["chair_check_s"]
+        self.map_name = session.map_name
+        session.rests = 0
         self.fighting = False
         self.loot = []            # map positions (screen px) of uncollected drops
         self.loot_dir = None      # "left"/"right" while walking to loot
@@ -59,6 +98,10 @@ class Trainer:
 
     def step(self):
         d = self.session.detectors
+        # Priority (after the session's stop conditions): HP low -> rest.
+        if self._hp_low():
+            self._rest()
+            return
         feet = d.me.feet if d.me else None
         here = self.attacker.here()
         mobs = [m for m in d.found if feet and self._inside_margins(m, feet)]
@@ -66,9 +109,16 @@ class Trainer:
         if self.fighting and not self.attacker.attacking and feet and here is not None:
             # Still walking to the target: a mob that spawned (or walked)
             # clearly closer takes over, and the far target is forgotten.
-            target_dx = abs(self.attacker.target - here)
+            # Only for a mob no healthier than the target (a wounded target
+            # is not abandoned for a fresh mob) and in the direction of
+            # travel (no turning back toward a side that was outweighed).
+            target_dx = self.attacker.target - here
+            sign = 1 if target_dx > 0 else -1
             closer = [m for m in mobs
-                      if abs(m.feet[0] - feet[0]) + self.retarget_margin < target_dx]
+                      if 0 <= (m.feet[0] - feet[0]) * sign
+                      and abs(m.feet[0] - feet[0]) + self.retarget_margin < abs(target_dx)
+                      and m.hp <= self.target_hp]
+            target_dx = abs(target_dx)
             if closer:
                 mob = min(closer, key=lambda m: abs(m.feet[0] - feet[0]))
                 self.log.event(f"Closer mob {abs(mob.feet[0] - feet[0])} px away; "
@@ -100,7 +150,7 @@ class Trainer:
                 return
 
         if mobs and feet:
-            self._fight(min(mobs, key=lambda m: abs(m.feet[0] - feet[0])), feet)
+            self._fight(pick_target(mobs, feet, self.prefer_hurt_px, self.side_falloff), feet)
             return
         self._sweep()
 
@@ -133,6 +183,10 @@ class Trainer:
 
     def _fight(self, mob, feet):
         self.attacker.set_target(mob, feet)
+        self.target_hp = mob.hp
+        if mob.hp < 1:
+            self.log.event(f"Target: {mob.name} at {mob.hp:.0%} HP, "
+                           f"{abs(mob.feet[0] - feet[0])} px away.")
         self.fighting = True
         self._set_state("fighting")
         self.attacker.step()
@@ -183,6 +237,94 @@ class Trainer:
         self.attacker._walk(direction)
         self.keys.hold_repeating("loot")
         return True
+
+    # --- rest -----------------------------------------------------------------
+
+    def _rest(self):
+        """HP is low: go to the closest safe spot (jumping over mobs in the
+        way, fighting nothing), sit on the chair, and get up once HP is
+        full. A mob at the character's height while sitting is fought, then
+        the bot returns to the spot and sits again. If no safe spot can be
+        reached, the run stops (movement.MoveFailed)."""
+        self.attacker.stop()
+        self.keys.release("loot")
+        self.fighting, self.loot, self.loot_dir = False, [], None
+        self.session.rests += 1
+        self._set_state("resting")
+        self.log.event(f"HP {self.session.detectors.hp:.0f}%: going to rest.")
+        self._go_to_safe_spot()
+        self._sit()
+        while True:
+            self.session.tick()
+            d = self.session.detectors
+            if d.hp is not None and d.hp >= self.hp_full:
+                self.keys.tap("jump")          # stand up without walking off
+                self.log.event(f"HP {d.hp:.0f}%: rested; back to training.")
+                self.mover.settle()
+                self.sweep_x = None
+                return
+            feet = d.me.feet if d.me else None
+            if feet and d.found:
+                self._fight_while_resting(feet)
+                self._go_to_safe_spot()
+                self._sit()
+
+    def _go_to_safe_spot(self):
+        self.mover.jump_check = self._mob_ahead
+        try:
+            index = self.mover.closest_safe_spot(self.map_name)
+            self.mover.goto_safe_spot(self.map_name, index)
+        finally:
+            self.mover.jump_check = None
+
+    def _sit(self):
+        """Sit on the chair. Being hit blocks the chair for a while, so wait
+        until HP has not dropped for chair_wait_s first; and if HP is not
+        rising chair_check_s after pressing it, press again."""
+        self.mover.settle()
+        while True:
+            self._wait_for_no_damage()
+            self.keys.tap("chair")
+            start_hp = self.session.detectors.hp
+            self.log.event("Sitting on the chair.")
+            end = time.monotonic() + self.chair_check_s
+            while time.monotonic() < end:
+                self.session.tick()
+            hp = self.session.detectors.hp
+            if hp is None or start_hp is None or hp > start_hp or hp >= self.hp_full:
+                return
+            self.log.event(f"HP not rising ({start_hp:.0f}% -> {hp:.0f}%); "
+                           f"the chair did not take, trying again.")
+
+    def _wait_for_no_damage(self):
+        """Tick until HP has not dropped for chair_wait_s."""
+        last_hp, calm_since = self.session.detectors.hp, time.monotonic()
+        while time.monotonic() - calm_since < self.chair_wait_s:
+            self.session.tick()
+            hp = self.session.detectors.hp
+            if hp is not None and last_hp is not None and hp < last_hp - 0.5:
+                calm_since = time.monotonic()
+            last_hp = hp
+
+    def _mob_ahead(self, direction):
+        """Whether a reachable mob is within jump_over_px ahead (for jumping
+        over it on the way to rest)."""
+        d = self.session.detectors
+        feet = d.me.feet if d.me else None
+        if not feet:
+            return False
+        sign = 1 if direction == "right" else -1
+        return any(0 <= (m.feet[0] - feet[0]) * sign <= self.jump_over_px for m in d.found)
+
+    def _fight_while_resting(self, feet):
+        """A mob reached the character at the safe spot: kill it."""
+        d = self.session.detectors
+        mob = min(d.found, key=lambda m: abs(m.feet[0] - feet[0]))
+        self.log.event(f"Mob at the safe spot ({mob.name}); getting up to fight it.")
+        self.attacker.set_target(mob, feet)
+        while self.attacker.step() == "fighting":
+            self.session.tick()
+        self.attacker.stop()
 
     # --- sweep ----------------------------------------------------------------
 

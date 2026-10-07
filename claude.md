@@ -90,11 +90,18 @@ All numbers are starting values and live in the config.
 - Getting onto a platform spot: no marking; the bot searches (movement.py).
   Takeoff spots are tried nearest first, 2 minimap px apart, up to 30 px to
   each side: on the starting level around the spot's x, on a level partway up
-  around where the character landed. At each takeoff spot: a jump straight
-  up first (platforms can be jumped up through from below), then a jump
+  around where the character landed. First running jumps toward the spot
+  (back up 6 minimap px, config runup, then jump while still walking when
+  passing the takeoff spot): they clear mobs in the way, where a standing
+  jump next to a mob got knocked down in the game. Then jumps straight up
+  (platforms can be jumped up through from below), then standing jumps
   toward the spot. After each landing check the minimap height: at the
   spot's height = done; higher = keep searching from that level; lower =
-  fell, search again from there. Walking off a level's edge is remembered,
+  fell, search again from there. Landing a little above the spot's height
+  (sloped platforms) is fine: the height that counts is the one at the
+  spot's x (the old "ended up above the safe spot" stop ended a run in the
+  game). Already on the spot's level (e.g. after a fight while resting):
+  just walk to it. Walking off a level's edge is remembered,
   so later tries on that level stay inside it. Give up after 60 tries
   (config): log and stop. The route that worked (each takeoff x, jump
   direction and landing height) is saved with the spot in the points file and
@@ -102,14 +109,31 @@ All numbers are starting values and live in the config.
   where expected. Moving a spot clears its route.
 - Walking: hold the arrow key toward the target x, pulse it within 4 minimap
   px to avoid overshooting, stop within 1 px. No progress for 3 s = the walk
-  fails. A jump has landed when the minimap height has not changed for 3
-  readings, at least 0.3 s after the jump.
+  fails. A jump has landed when the minimap height has not changed for
+  0.25 s, at least 0.5 s after the jump (config land_still_s, min_air_s; a
+  count of 3 equal readings mistook the top of a jump for a landing at the
+  higher frame rate). A moving jump's arrow is let go 0.15 s after the jump
+  (config air_hold_s): the jump keeps its sideways momentum in the air, and
+  holding the arrow until touchdown walked the character past the safe spot
+  (and off narrow platforms) after landing. Raise it if running jumps fall
+  short.
 - Fight and loot loop (trainer.py, rebuilt simply after the rule-on-rule
-  version got erratic): (1) no target and no loot waiting: pick the closest
-  reachable mob; (2) fight it until it is dead; while still walking to it, a
-  mob 100 screen px (config retarget_margin_px) closer takes over and the
-  far target is forgotten (e.g. mobs spawning nearer); once attacking, the
-  target is kept; (3) loot: walk with Z held
+  version got erratic): (1) no target and no loot waiting: first the side:
+  each reachable mob weighs (2 - HP share) / (1 + distance / 150 px)
+  (config side_falloff_px), and the bot goes to the side (left or right)
+  whose mobs weigh more, so a crowd farther away outweighs a single close
+  mob, and a very close mob outweighs a couple of distant ones (one at
+  30 px beats two at 200 and 300 px; five at 400-800 px beat one at 50 px).
+  Then on that side: the lowest-HP mob among those at most 300 screen px
+  (config prefer_hurt_within_px) farther than the nearest there, nearest
+  first among equals (mobs take several hits, so wounded ones get finished
+  off, but not by walking across the map). A wounded mob nearby can lose
+  to a crowd on the other side (60% HP at 81 px vs six unhurt to the
+  right); raise its weight if that should not happen. (2) fight it until it
+  is dead; while still walking to it, a mob 100 screen px (config
+  retarget_margin_px) closer, no healthier and in the direction of travel
+  takes over and the far target is forgotten (e.g. mobs spawning nearer);
+  once attacking, the target is kept; (3) loot: walk with Z held
   through every spot where a mob died and 40 screen px (config loot
   past_px) beyond the furthest, in the direction of the drops (the way the
   character faces if they are right under it); (4) a mob between the
@@ -140,10 +164,24 @@ All numbers are starting values and live in the config.
   Shroom and Blue Snail only. Higher levels: Red Snail, Pig, Blue Snail,
   Shroom. No Orange Mushroom on this map (the orange-capped mobs are
   Shrooms). Useful for automatic map setup later.
-- Rest: below 25% HP, jump up to a safe platform, sit on a chair, get up when
-  HP is full. On the way, jump over mobs in the path and fight nothing. If a
-  jump fails, keep going.
-- Hit while sitting: kill the mob, sit again.
+- Rest: below 25% HP (priority above fighting and sweeping), go to the
+  closest safe spot (stage 7 movement: saved route or search), sit on the
+  chair (key Y), get up with a jump (so the character does not walk off the
+  platform) when HP is at least 98% (config hp_full_percent; the bar
+  reading can stop a hair short of 100). On the way, jump when a mob is
+  within 60 screen px ahead (config jump_over_px) and fight nothing; a
+  failed jump just carries on walking. If no safe spot can be reached, the
+  run stops (move failed) rather than fighting on at low HP. Rests are
+  counted in the summary. Being hit blocks the chair for a while (seen in
+  the game: the press did nothing and the bot waited indefinitely), so the
+  bot presses the chair key only once HP has not dropped for 3 s (config
+  chair_wait_s), and presses again if HP is not rising 2.5 s later (config
+  chair_check_s; was 5 s, too slow in the game; must stay longer than one
+  HP step while sitting, since a re-press while sitting may stand up).
+- Hit while sitting: a mob detected at the character's height while
+  resting is fought (get up, kill it), then the bot goes back to the spot
+  and sits again. Only the detected mobs ([mobs]: Blue Snail, Shroom) are
+  seen; Red Snails or Pigs reaching a safe spot would not be.
 - MP: below 10% use basic attacks. Resume the skill above 50%.
 - Attack (attack.py; v1 for now: basic attack only, key Ctrl; the skill and
   the warrior's values come later). One target at a time, given by the
@@ -176,6 +214,16 @@ All numbers are starting values and live in the config.
   0.68 (still rejected). Still missed: a Shroom 40% under loot (0.59, below
   the Red Snail, so no single cutoff separates them) and a mob being hit
   behind the character and swing effects (0.06-0.18).
+- Mob HP (mobs.attach_hp): a hurt mob shows an HP bar centered about 95 px
+  above its feet, about 75 px wide: a grey/white frame, inside green for HP
+  left and black for HP gone. A mob without a bar is unhurt (1.0). The bar
+  is read in a box above each detected mob: the row of green-or-black
+  pixels with the grey frame just above it (plain black is not a bar:
+  region capture fills uncaptured areas with black). Bars fade when a mob
+  has not been hit for a while, dimming every color, so green means
+  green-dominant, not bright. ~1-2 ms per frame. Region capture's strip
+  reaches 130 px above the feet to include the bars. The overlay shows the
+  target's HP.
 - Known limitation, accepted for v1: a mob that spawns on top of the
   character is hidden by the character's body, weapon and effects and is
   not detected until it steps out. A prototype scoring only pixels outside
@@ -281,7 +329,9 @@ All numbers are starting values and live in the config.
   detections and, from stage 5, what the bot would do.
 - Frames can be saved and replayed so detection is testable without the game.
   The save-frame hotkey (Delete) writes a PNG to the run folder's frames/
-  subfolder. Replay loads a folder of PNGs.
+  subfolder, always from a full capture of its own (with region capture,
+  saving the analyzed frame could save only the regions). Replay loads a
+  folder of PNGs.
 - Debug overlay (config: overlay = "game" or "window"):
   - game (default): a see-through, click-through window drawn directly over
     the client. It is excluded from screen capture (Windows 10 2004+), so the
@@ -306,7 +356,8 @@ All numbers are starting values and live in the config.
   adds a safe spot, Page Down removes the nearest safe spot, End is the kill
   hotkey. The game's quick slots Del, Hm, Pdn and End must stay empty, since
   the game also receives these presses.
-- Movement keys: Left and Right arrows. Jump: Alt. Minimap: M.
+- Movement keys: Left and Right arrows. Jump: Alt. Minimap: M. Attack: Ctrl.
+  Loot: Z. Chair: Y (the GUI's hotkeys screen must include it later).
 - One folder per run under runs/, named by start date and time, holding the
   log and screenshots. runs/ is git-ignored.
 
@@ -325,14 +376,10 @@ All numbers are starting values and live in the config.
   (duration, deaths seen, unexpected screens, frames saved).
 
 ## Open items (ask, do not guess)
-- Which skill and its key (later; v1 uses basic attack for now); chair key;
-  the warrior's attack range
+- Which skill and its key (later; v1 uses basic attack for now); the
+  warrior's attack range
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
-- Which mobs can reach the safe platform while resting (whether Red Snail or
-  Orange Mushroom detection is needed for "hit while sitting"); decide at
-  stage 10
-- Jump-over trigger distance
 - Overnight PC settings: sleep, lock, updates, display scaling
 - From the admins: run report contents, whether the real server's client
   blocks synthetic input (the test server's does not), whether the real server's client runs as administrator (the test
@@ -355,4 +402,5 @@ randomized pathing, slow training mode, anti-detection (channel change, relog,
 map population check), EXP tracking. Pots and buffs: keys in the same config;
 buff recast automatic from the on-screen buff icon, matched to the specific
 buff so other active buffs are ignored. GUI with a hotkeys screen (HP pot, MP
-pot, skills, buffs) and a focus-lost popup that does not take focus itself.
+pot, skills, buffs, chair, and the other game keys in [keys]) and a
+focus-lost popup that does not take focus itself.

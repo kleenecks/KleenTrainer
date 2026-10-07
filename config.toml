@@ -100,6 +100,8 @@ right = "right"
 minimap = "m"
 attack = "ctrl"
 loot = "z"
+# The chair item's key (to sit while resting). To be set in the GUI later.
+chair = "y"
 
 [map]
 # Screen px per minimap px: the map's minimap area is 2317 game px wide
@@ -124,6 +126,17 @@ edge_margin = 20
 # HP % below which the bot goes to rest (stage 10); the loot walk after a
 # kill is skipped below it.
 hp_low_percent = 25
+# HP % that counts as full: the bot gets up (the bar reading can stop a
+# hair short of 100).
+hp_full_percent = 98
+# On the way to rest, jump when a mob is within this many screen px ahead.
+jump_over_px = 60
+# Being hit blocks the chair for a while: sit only once HP has not dropped
+# for this many seconds. If HP is not rising this many seconds after pressing
+# the chair key, press it again. Chairs restore HP in steps, so the check
+# must be longer than one step (a re-press while sitting may stand up).
+chair_wait_s = 3
+chair_check_s = 2.5
 
 [attack]
 # Attack when the target's feet are within this many screen px (left or
@@ -138,8 +151,18 @@ target_lost_s = 0.2
 # A target not seen for this many seconds while walking to it is given up.
 lost_s = 0.5
 # While walking to the target (not yet attacking), a mob at least this many
-# screen px closer takes over and the far target is forgotten.
+# screen px closer takes over and the far target is forgotten (only a mob
+# no healthier than the target).
 retarget_margin_px = 100
+# Target choice: the lowest-HP mob (read from the HP bar shown above hurt
+# mobs) among those at most this many screen px farther than the nearest.
+prefer_hurt_within_px = 300
+# Side choice: each mob weighs (2 - HP share) / (1 + distance / this), and
+# the bot goes to the side (left/right) whose mobs weigh more. Smaller =
+# closeness matters more; larger = numbers matter more. At 150, one mob
+# 30 px away beats two at 200 and 300 px, and five at 400-800 px beat one
+# 50 px away.
+side_falloff_px = 150
 # Lead the target by this many seconds while walking toward it: the bot acts
 # on slightly old frames, so it starts attacking when the gap expected this
 # much later is in range. 0 = no prediction (attack only when actually in
@@ -164,9 +187,22 @@ no_progress_s = 3
 level_tolerance = 1
 # Longest wait for a jump to land (s).
 jump_timeout_s = 2.0
+# Landed = the height unchanged for land_still_s, at least min_air_s after
+# the jump (the height also stays put briefly at the top of a jump).
+min_air_s = 0.5
+land_still_s = 0.25
+# Keep holding the arrow this many seconds after a moving jump, then let go:
+# the jump keeps its sideways momentum in the air, and holding on until
+# touchdown walked the character past the spot after landing. Raise it if
+# running jumps fall short.
+air_hold_s = 0.15
+# A running jump backs up this many minimap px before running at the
+# takeoff point.
+runup = 6
 # Platform search: takeoff spots this far apart, up to this far to each
-# side of the safe spot, and at most this many jumps. Straight-up jumps at
-# every takeoff spot come first, then jumps toward the spot.
+# side of the safe spot, and at most this many jumps. Running jumps toward
+# the spot come first, then straight-up jumps, then standing jumps toward
+# the spot.
 search_step = 2
 search_max_offset = 30
 search_max_tries = 60

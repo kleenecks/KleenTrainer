@@ -78,18 +78,19 @@ def player_view(reading):
     return [f"player: {reading.status}{score}, feet ({x}, {y})"], [], [reading.feet]
 
 
-def mob_view(found, feet):
+def mob_view(found, feet, prefer_px, falloff):
     """Overlay text, boxes and points for reachable mobs. The box marks the
-    target the bot would pick: the nearest reachable mob."""
+    target the bot would pick (trainer.pick_target: the heavier side, then
+    the lowest HP unless much farther than the nearest)."""
     if feet is None:
         return ["mobs: no player position"], [], []
     if not found:
         return ["mobs: none reachable"], [], []
-    target = min(found, key=lambda m: abs(m.feet[0] - feet[0]))
+    target = trainer.pick_target(found, feet, prefer_px, falloff)
     tx, ty = target.feet
     box = capture.Region(tx - 30, ty - 60, 60, 64)
-    return ([f"mobs: {len(found)} reachable, target {target.name} at ({tx}, {ty})"],
-            [box], [m.feet for m in found])
+    return ([f"mobs: {len(found)} reachable, target {target.name} at ({tx}, {ty}), "
+             f"HP {target.hp:.0%}"], [box], [m.feet for m in found])
 
 
 def bar_text(name, fill):
@@ -106,6 +107,8 @@ class Detectors:
         self.mobs = mobs.MobDetector(list(config["mobs"]), config["mob_detection"])
         self.hp_bar = config["status"]["hp_bar"]
         self.mp_bar = config["status"]["mp_bar"]
+        self.prefer_hurt_px = config["attack"]["prefer_hurt_within_px"]
+        self.side_falloff = config["attack"]["side_falloff_px"]
         self.event = event
         self.safe_spots = list(safe_spots)
         self.was_dead = False
@@ -129,8 +132,10 @@ class Detectors:
         reading = self.minimap.read(frame)
         me = self.player.read(frame, now)
         found = self.mobs.detect(frame, me.feet[1]) if me.feet else []
+        if found:
+            mobs.attach_hp(found, frame, me.feet[1])
         for view in (minimap_view(reading, self.safe_spots), player_view(me),
-                     mob_view(found, me.feet)):
+                     mob_view(found, me.feet, self.prefer_hurt_px, self.side_falloff)):
             lines += view[0]
             rects += view[1]
             points += view[2]
@@ -233,6 +238,7 @@ class Session:
         self.last_focus_loss = 0.0
         self.reopen_tried = False
         self.attacker = None   # set by tasks that fight, for the summary
+        self.rests = None      # set by the trainer, for the summary
         self.state = "moving" if input_on else "watching"   # for the status line
         self.last_full = 0.0   # when the last full frame was captured
         self.slow_count = 0    # frames since the bars and death dialog were captured
@@ -299,7 +305,8 @@ class Session:
         feet_y = me.feet[1]
         # Above the feet: the tallest mob sprite plus the mob search margins;
         # below: the name tag and its tracking margin.
-        above = d.mobs.reach_up + c["strip_margin"]
+        # (and the mobs' HP bars, which sit higher)
+        above = max(d.mobs.reach_up, mobs.BAR_ABOVE_FEET) + c["strip_margin"]
         below = player.TAG_TO_FEET_Y + player.TRACK_MARGIN + d.player.letters.shape[0] + c["strip_margin"]
         b = reading.bounds
         regions = [
@@ -320,7 +327,11 @@ class Session:
 
     def _hotkeys(self):
         if self.requests["save_frame"].is_set():
-            print(f"Saved {capture.save_frame(self.frame, self.run_dir / 'frames')}")
+            # A full capture of its own: the frame just analyzed may hold
+            # only the captured regions (the request can arrive after it
+            # was taken).
+            full = self.capturer.grab()
+            print(f"Saved {capture.save_frame(full, self.run_dir / 'frames')}")
             self.saved += 1
         if self.requests["mark_safe_spot"].is_set():
             mark_safe_spot(self.detectors, self.map_name,
@@ -378,7 +389,8 @@ class Session:
         self.log.event(f"Summary: duration {self.log.duration()}, deaths seen {d.deaths}, "
                        f"unexpected screens {d.unexpected_screens}, "
                        f"focus losses {self.focus_losses}, frames saved {self.saved}"
-                       + (f", attacks {self.attacker.attacks}" if self.attacker else "") + ".")
+                       + (f", attacks {self.attacker.attacks}" if self.attacker else "")
+                       + (f", rests {self.rests}" if self.rests is not None else "") + ".")
         self.log.close()
 
 

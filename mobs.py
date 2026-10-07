@@ -39,6 +39,80 @@ class Mob:
     name: str
     feet: tuple    # client pixels
     rms: float     # grey-level difference; 0 = exact
+    hp: float = 1.0   # share of HP left, from its HP bar (1.0 = no bar: unhurt)
+
+
+# Mob HP bars (shown above a mob once it is hurt): about 75 px wide,
+# centered on the mob, about 95 px above its feet. Inside a grey/white
+# frame, the rows are green where HP is left and black where it is gone. A
+# bar fades out when the mob has not been hit for a while, dimming all its
+# colors, so green means "clearly green-dominant", not a fixed brightness.
+BAR_MIN_WIDTH = 50
+BAR_MAX_WIDTH = 90
+# The grey frame is within this many rows above the inside rows.
+BAR_FRAME_ROWS = 4
+# Rows above a mob's feet, and px to each side of it, to look for its bar;
+# the rows are also used by region capture.
+BAR_ABOVE_FEET = 130
+BAR_BELOW_FEET = 30
+BAR_SIDE = 60
+
+
+def _bar_masks(box):
+    """Per-pixel tests for HP bars in an image region: (green, inside =
+    green or black, frame = neutral grey/white)."""
+    # OpenCV's 8-bit operations (saturating) are much faster than numpy on
+    # wider integers.
+    b, g, r = cv2.split(np.ascontiguousarray(box))
+    rb = cv2.max(r, b)
+    low, high = cv2.min(cv2.min(b, g), r), cv2.max(rb, g)
+    # Green-dominant: g above 3x the other channels plus 16, and not too dim.
+    green = (g >= 24) & (cv2.subtract(g, cv2.add(cv2.add(rb, rb), cv2.add(rb, 16))) > 0)
+    black = high < 12
+    # The bar's frame: neutral grey/white (faded bars: dim grey), never the
+    # pure black that fills uncaptured parts of a region-capture frame.
+    frame_grey = (cv2.subtract(high, low) < 10) & (low >= 24)
+    return green, green | black, frame_grey
+
+
+def _bar_hp(box, masks=None):
+    """Share of HP left from the bar inside box (an image region), or None
+    if there is no bar: the row with the most green-or-black pixels in a run
+    at least BAR_MIN_WIDTH wide, with the grey frame just above it."""
+    green, inside, frame_grey = masks if masks is not None else _bar_masks(box)
+    best = None
+    counts = inside.sum(axis=1)
+    for row in np.flatnonzero(counts >= BAR_MIN_WIDTH):
+        if row < BAR_FRAME_ROWS:
+            continue
+        cols = np.flatnonzero(inside[row])
+        if (len(cols) < BAR_MIN_WIDTH or len(cols) > BAR_MAX_WIDTH
+                or cols[-1] - cols[0] + 1 > 1.1 * len(cols) + 2):
+            continue   # too short or long, or not one solid run
+        if not any(frame_grey[row - k, cols[0]:cols[-1] + 1].mean() >= 0.8
+                   for k in range(1, BAR_FRAME_ROWS + 1)):
+            continue   # no grey frame above it: not a bar
+        if best is None or len(cols) > best[0]:
+            best = (len(cols), green[row].sum() / len(cols))
+    return None if best is None else best[1]
+
+
+def attach_hp(mobs, frame, feet_y):
+    """Set each mob's hp from the HP bar centered above it, if it has one
+    (bars only appear on hurt mobs)."""
+    if not mobs:
+        return mobs
+    y0, y1 = max(feet_y - BAR_ABOVE_FEET, 0), max(feet_y - BAR_BELOW_FEET, 0)
+    x0 = max(min(m.feet[0] for m in mobs) - BAR_SIDE, 0)
+    x1 = max(m.feet[0] for m in mobs) + BAR_SIDE
+    # The pixel tests once for the band above all the mobs, then per mob.
+    masks = _bar_masks(frame[y0:y1, x0:x1])
+    for mob in mobs:
+        a, b = max(mob.feet[0] - BAR_SIDE, 0) - x0, mob.feet[0] + BAR_SIDE - x0
+        hp = _bar_hp(None, tuple(m[:, a:b] for m in masks))
+        if hp is not None:
+            mob.hp = hp
+    return mobs
 
 
 @dataclass
