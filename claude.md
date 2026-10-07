@@ -32,11 +32,12 @@ character is a Wizard and is used only for observe-only testing.)
 
 In v1: player position from the minimap, player position on screen, map points
 marked in-game with a hotkey, walking and jumping to a safe platform, mob
-detection, looting, HP bar / MP bar / death, stuck detection, logging with
-screenshots, kill hotkey.
+detection, looting, HP bar / MP bar / death, logging with screenshots, kill
+hotkey.
 
 Not in v1: map recorder, rope or ladder climbing, multi-platform navigation,
-randomized pathing, GUI, pots, buffs, EXP tracking, anti-detection.
+randomized pathing, GUI, pots, buffs, EXP tracking, anti-detection, stuck
+detection and recovery (dropped from v1 since it trains one known map).
 
 ## Build order
 Observe only (the user plays, the bot only watches):
@@ -61,15 +62,16 @@ Bot takes input:
 8. Attack
 9. Sweep and loot
 10. Rest at safe zone, with the behavior priority order
-11. Stuck detection, periodic screenshots, overnight hardening, run report
+11. Periodic screenshots, overnight hardening (stuck detection and the run
+    report dropped from v1)
 
 ## Behavior priority (highest wins)
 1. Kill hotkey: stop
 2. Death or unexpected screen: stop and log
-3. Stuck: run recovery
-4. HP low: go to the safe zone and rest
-5. Reachable mob: attack
-6. Otherwise: sweep and loot
+3. HP low: go to the safe zone and rest
+4. Reachable mob: attack
+5. Otherwise: sweep and loot
+(Stuck recovery, formerly 3, is dropped from v1.)
 MP low is not a state. It only changes which attack is used.
 
 ## Behavior details
@@ -79,7 +81,7 @@ All numbers are starting values and live in the config.
   whole bottom floor counts.
 - Sweep: walk the whole bottom floor end to end when no mob is reachable. An
   end is reached when the minimap x stops changing while walking (the map's
-  walls); then turn around. This must not count as movement stuck.
+  walls); then turn around.
 - Marked points (v1): safe spots, minimap positions where the character can
   rest (on the floor or on a platform). Home adds a spot at the character's
   position, or moves an existing spot within 5 minimap px (config). Page Down
@@ -170,12 +172,27 @@ All numbers are starting values and live in the config.
   platform) when HP is at least 98% (config hp_full_percent; the bar
   reading can stop a hair short of 100). On the way, jump when a mob is
   within 60 screen px ahead (config jump_over_px) and fight nothing; a
-  failed jump just carries on walking. If no safe spot can be reached, the
+  failed jump just carries on walking. Loot on the way: Z held while walking,
+  let go while a mob is within the jump-over distance ahead (dodging) and on
+  arrival. If no safe spot can be reached, the
   run stops (move failed) rather than fighting on at low HP. Rests are
-  counted in the summary. Being hit blocks the chair for a while (seen in
+  counted in the summary.
+- Leaving the safe spot after resting (trainer._leave_spot): the floor's
+  height is remembered when the rest starts. After standing up, the bot
+  walks off toward the heavier side of the mobs on the floor (side_weight;
+  the floor is searched from the platform with a full capture at several
+  heights around its estimated screen height, since the minimap height is
+  too coarse to pin it), else the exit remembered for this spot, else the
+  sweep direction. Loot key held. A wall (no movement for 1 s) or no floor
+  within 4 s (config exit_timeout_s): turn around and try the other way;
+  neither works: the run stops. The direction that worked is saved with the
+  spot ("exit"), and sweeping continues that way. Before this, training
+  resumed by sweeping off the platform in whatever direction the sweep had,
+  which could walk into a wall. Being hit blocks the chair for a while (seen in
   the game: the press did nothing and the bot waited indefinitely), so the
-  bot presses the chair key only once HP has not dropped for 3 s (config
-  chair_wait_s), and presses again if HP is not rising 2.5 s later (config
+  bot presses the chair key 2 s after arriving at the spot (config
+  arrive_wait_s) and only once HP has not dropped for 1.5 s (config
+  chair_wait_s; was 3 s; the two waits overlap), and presses again if HP is not rising 2.5 s later (config
   chair_check_s; was 5 s, too slow in the game; must stay longer than one
   HP step while sitting, since a re-press while sitting may stand up).
 - Hit while sitting: a mob detected at the character's height while
@@ -231,11 +248,12 @@ All numbers are starting values and live in the config.
   per frame). A possible fallback, not built: HP dropping with no mob
   detected nearby = a hidden mob touching the character; swing facing,
   then turn.
-- Movement stuck: movement keys sent but minimap position unchanged for 3 s.
-  Recovery: jump, then walk the opposite way for 1 s and retry. After 3 failed
-  attempts, stop and log with a screenshot.
-- Attack stuck: same spot attacked for 15 s with the target still detected.
-  Ignore that spot for 60 s and go back to sweeping. 3 in a row: stop and log.
+- Stuck detection and recovery: dropped from v1 (one known map). The plan,
+  for later: movement stuck = movement keys sent but minimap position
+  unchanged for 3 s (recovery: jump, walk the opposite way for 1 s, retry;
+  3 failures: stop and log with a screenshot); attack stuck = same spot
+  attacked for 15 s with the target still detected (ignore that spot for
+  60 s; 3 in a row: stop and log).
 - Focus lost (client not in the foreground): full-screen screenshot, release
   all keys, console message, log entry, bring the client to the front and
   continue. Stop instead if Windows refuses the focus change, or if focus is
@@ -254,8 +272,10 @@ All numbers are starting values and live in the config.
   if it is still not found 3 s later.
 - Unexpected screen: minimap still missing after the reopen attempt above, or
   minimap size differs from startup. Release keys, console message, log
-  entry, stop. Dialog boxes are not detected directly in v1; the stuck and
-  minimap checks catch them. Revisit if one causes trouble overnight.
+  entry, stop. Dialog boxes are not detected directly in v1. Only the
+  minimap check catches a dialog that covers the minimap; with stuck
+  detection dropped, one elsewhere goes unnoticed. Revisit if one causes
+  trouble overnight.
 - Death: stop and log. Detected by template-matching the "PRESS OK TO BE
   REVIVED." headline of the death dialog, near its usual spot. The dialog
   appears a couple of seconds after dying.
@@ -362,12 +382,16 @@ All numbers are starting values and live in the config.
   log and screenshots. runs/ is git-ignored.
 
 ## Logging
-- Screenshot of the client every 5 minutes, and one on every stop. The
-  focus-lost screenshot captures the full screen.
+- Screenshot of the client every 5 minutes (config screenshot_every_s; JPEG,
+  about 0.5 MB, so an 8-hour night is about 50 MB; skipped while watching if
+  the client is not in front, so it never pulls focus), and one on every
+  stop (PNG, full detail; its name is in the stop log line). In the run
+  folder's screenshots/. The focus-lost screenshot captures the full screen.
 - Timestamped log lines: run start with config values, state changes, switch
-  to basic attacks and back, stuck events and each recovery attempt, stop with
-  reason, and a status line every minute (position, HP %, MP %, state).
-- Summary at stop: duration, rests, stuck events, attack count.
+  to basic attacks and back, stop with reason, and a status line every
+  minute (position, HP %, MP %, state).
+- Summary at stop: duration, rests, attack count (plus deaths seen,
+  unexpected screens, focus losses, frames saved).
 - No per-keypress logging.
 - Log timestamps have milliseconds (to time short pauses).
 - The log is run.log in the run folder; lines are also printed. In stages 1
@@ -380,12 +404,31 @@ All numbers are starting values and live in the config.
   warrior's attack range
 - Client resolution on the real server. The test server uses a custom size
   (client area 2049x1152).
-- Overnight PC settings: sleep, lock, updates, display scaling
-- From the admins: run report contents, whether the real server's client
+- From the admins: whether the real server's client
   blocks synthetic input (the test server's does not), whether the real server's client runs as administrator (the test
   server's does)
 
-## Findings for the admins (run report)
+## Overnight checklist (before leaving it running)
+- Laptop plugged in; lid open (closing it turns the display off and the
+  capture sees nothing).
+- Power settings: sleep Never, turn off display Never (when plugged in);
+  no screen saver.
+- No screen lock: a lock screen takes focus, and 3 focus losses in a row
+  stop the run.
+- Windows Update: pause updates (or set active hours to cover the night), so
+  no restart happens mid-run.
+- Notifications: turn on Do not disturb / Focus assist, so pop-ups do not
+  take focus.
+- Display scaling and the game's window size unchanged since the templates
+  were cut (the 2049x1152 client).
+- In the game: minimap at normal size, chair on Y, quick slots Del, Hm, Pdn
+  and End empty, character on the bottom floor.
+- config.toml: [attack] debug_log = false (otherwise run.log gets a line per
+  attack decision all night).
+- Run python main.py train from an administrator terminal, then leave the
+  game in front and do not touch the PC.
+
+## Findings for the admins
 - 2026-10-06: the test server's bot detection started flagging the trainer
   during stage 9 testing. Suspected (not confirmed) signal: very regular
   input timing; the loop runs at a fixed 10 Hz and the held loot key's
@@ -397,6 +440,7 @@ Mapping as its own part of the tool, separate from the trainer: marking
 safe spots (and sweep ends, other points) moves there. The trainer detects
 which map it is on by itself and loads that map's safe spots, routes and
 mob list automatically. Map files are shareable, in the project folders.
+Stuck detection and recovery (see Behavior details).
 Rope climbing,
 randomized pathing, slow training mode, anti-detection (channel change, relog,
 map population check), EXP tracking. Pots and buffs: keys in the same config;

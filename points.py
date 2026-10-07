@@ -4,7 +4,9 @@ v1 marks safe spots: minimap dot positions (relative to the minimap's map
 area) where the character rests. Each spot can also hold the route the bot
 learned for getting there (filled in from stage 7), or null.
 
-File format: {"safe_spots": [{"spot": [x, y], "route": null}, ...]}
+File format: {"safe_spots": [{"spot": [x, y], "route": null}, ...]}; a spot
+can also hold "exit": the direction ("left"/"right") that got back down to
+the floor after resting.
 """
 
 import json
@@ -49,6 +51,7 @@ def add_safe_spot(map_name, dot, merge_distance):
     for s in data["safe_spots"]:
         if _distance(s["spot"], dot) <= merge_distance:
             s["spot"], s["route"] = list(dot), None   # the old route no longer applies
+            s.pop("exit", None)
             save(map_name, data)
             return "moved"
     data["safe_spots"].append({"spot": list(dot), "route": None})

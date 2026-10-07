@@ -26,10 +26,14 @@ import time
 
 import attack
 import movement
+import points
 
 # A mob this close (screen px) counts as on top of the character, on either
 # side, so it is "in the way" of loot in either direction.
 ON_TOP_PX = 30
+# After resting, mobs on the floor are searched this many px above and below
+# the floor's estimated screen height.
+FLOOR_SCAN_PX = 60
 
 
 def side_weight(mobs, feet, falloff):
@@ -79,6 +83,8 @@ class Trainer:
         self.jump_over_px = config["rest"]["jump_over_px"]
         self.chair_wait_s = config["rest"]["chair_wait_s"]
         self.chair_check_s = config["rest"]["chair_check_s"]
+        self.exit_timeout_s = config["rest"]["exit_timeout_s"]
+        self.arrive_wait_s = config["rest"]["arrive_wait_s"]
         self.map_name = session.map_name
         session.rests = 0
         self.fighting = False
@@ -252,38 +258,135 @@ class Trainer:
         self.session.rests += 1
         self._set_state("resting")
         self.log.event(f"HP {self.session.detectors.hp:.0f}%: going to rest.")
-        self._go_to_safe_spot()
+        reading = self.session.detectors.reading
+        floor_y = reading.dot[1] if reading and reading.dot else None   # trains on the floor
+        spot = self._go_to_safe_spot()
         self._sit()
         while True:
             self.session.tick()
             d = self.session.detectors
             if d.hp is not None and d.hp >= self.hp_full:
                 self.keys.tap("jump")          # stand up without walking off
-                self.log.event(f"HP {d.hp:.0f}%: rested; back to training.")
+                self.log.event(f"HP {d.hp:.0f}%: rested; leaving the safe spot.")
                 self.mover.settle()
+                if floor_y is not None:
+                    self._leave_spot(spot, floor_y)
+                self.log.event("Back to training.")
                 self.sweep_x = None
                 return
             feet = d.me.feet if d.me else None
             if feet and d.found:
                 self._fight_while_resting(feet)
-                self._go_to_safe_spot()
+                spot = self._go_to_safe_spot()
                 self._sit()
 
     def _go_to_safe_spot(self):
+        """Go to the closest safe spot, jumping over mobs in the way and
+        looting on the way (loot key held, except while dodging a mob)."""
         self.mover.jump_check = self._mob_ahead
+        self.mover.on_tick = self._loot_unless_dodging
         try:
             index = self.mover.closest_safe_spot(self.map_name)
             self.mover.goto_safe_spot(self.map_name, index)
+            return index
         finally:
             self.mover.jump_check = None
+            self.mover.on_tick = None
+            self.keys.release("loot")
+
+    def _loot_unless_dodging(self):
+        """On the way to rest: hold the loot key while walking, but let go
+        while a mob is just ahead (the bot is about to jump over it)."""
+        held = self.keys.held
+        walking = "right" if self.keys.bindings["right"] in held else (
+            "left" if self.keys.bindings["left"] in held else None)
+        if walking and not self._mob_ahead(walking):
+            self.keys.hold_repeating("loot")
+        else:
+            self.keys.release("loot")
+
+    def _leave_spot(self, index, floor_y):
+        """Get from the safe spot back down to the floor (height floor_y):
+        walk off toward the heavier side of the mobs on the floor, or else
+        the exit remembered for this spot (or the sweep direction the first
+        time), with the loot key held. A wall (no movement for wall_s) or
+        no floor within exit_timeout_s: turn around and try the other way.
+        The direction that worked is saved with the spot."""
+        data = points.load(self.map_name)
+        entry = data["safe_spots"][index]
+        x, y = self.mover.dot()
+        if y >= floor_y - self.mover.level:
+            return                                  # already on the floor
+        first = self._floor_side(floor_y, y) or entry.get("exit") or self.direction
+        for direction in (first, "left" if first == "right" else "right"):
+            self.log.event(f"Leaving the safe spot: walking {direction}.")
+            start = moved_at = time.monotonic()
+            last_x = None
+            while True:
+                x, y = self.mover.dot()
+                now = time.monotonic()
+                if y >= floor_y - self.mover.level:
+                    self.attacker.stop()
+                    self.log.event(f"Back on the floor at minimap x {x}.")
+                    if entry.get("exit") != direction:
+                        entry["exit"] = direction
+                        points.save(self.map_name, data)
+                    self.direction = direction      # keep sweeping this way
+                    return
+                if x != last_x:
+                    last_x, moved_at = x, now
+                elif now - moved_at > self.wall_s:
+                    break                           # a wall: try the other way
+                if now - start > self.exit_timeout_s:
+                    break
+                self.attacker._walk(direction)
+                self.keys.hold_repeating("loot")
+            self.attacker.stop()
+        raise movement.MoveFailed("could not get back down from the safe spot")
+
+    def _floor_side(self, floor_y, y):
+        """"left"/"right" toward the heavier side of the mobs on the floor
+        (side_weight), or None if none are seen. The detectors only search
+        the character's height, so the floor's screen height is worked out
+        from the minimap: floor_y - y minimap px below, at the minimap's
+        scale."""
+        d = self.session.detectors
+        feet = d.me.feet if d.me else None
+        if not feet:
+            return None
+        # A full capture: the floor is below the strip region capture grabs.
+        frame = self.session.capturer.grab()
+        # The minimap height is too coarse to pin the floor's screen height
+        # exactly, so several heights around the estimate are searched (once
+        # per rest, so the extra time does not matter).
+        estimate = round(feet[1] + (floor_y - y) * self.k)
+        found = []
+        for floor_feet_y in range(estimate - FLOOR_SCAN_PX, estimate + FLOOR_SCAN_PX + 1, 20):
+            if floor_feet_y >= frame.shape[0]:
+                break
+            for m in d.mobs.detect(frame, floor_feet_y):
+                if (self._inside_margins(m, feet)
+                        and all(abs(m.feet[0] - o.feet[0]) > 25 for o in found)):
+                    found.append(m)
+        if not found:
+            return None
+        left = [m for m in found if m.feet[0] < feet[0]]
+        right = [m for m in found if m.feet[0] >= feet[0]]
+        heavier = ("left" if side_weight(left, feet, self.side_falloff)
+                   > side_weight(right, feet, self.side_falloff) else "right")
+        self.log.event(f"Mobs on the floor: {len(left)} left, {len(right)} right.")
+        return heavier
 
     def _sit(self):
-        """Sit on the chair. Being hit blocks the chair for a while, so wait
-        until HP has not dropped for chair_wait_s first; and if HP is not
-        rising chair_check_s after pressing it, press again."""
+        """Sit on the chair. Wait arrive_wait_s after arriving, and (each
+        attempt) until HP has not dropped for chair_wait_s, since being hit
+        blocks the chair for a while; if HP is not rising chair_check_s
+        after pressing it, press again."""
         self.mover.settle()
+        min_wait = self.arrive_wait_s          # first press: let it settle in
         while True:
-            self._wait_for_no_damage()
+            self._wait_for_no_damage(min_wait)
+            min_wait = 0
             self.keys.tap("chair")
             start_hp = self.session.detectors.hp
             self.log.event("Sitting on the chair.")
@@ -296,10 +399,13 @@ class Trainer:
             self.log.event(f"HP not rising ({start_hp:.0f}% -> {hp:.0f}%); "
                            f"the chair did not take, trying again.")
 
-    def _wait_for_no_damage(self):
-        """Tick until HP has not dropped for chair_wait_s."""
-        last_hp, calm_since = self.session.detectors.hp, time.monotonic()
-        while time.monotonic() - calm_since < self.chair_wait_s:
+    def _wait_for_no_damage(self, min_wait=0):
+        """Tick for at least min_wait seconds and until HP has not dropped
+        for chair_wait_s (both counted from now, so they overlap)."""
+        start = time.monotonic()
+        last_hp, calm_since = self.session.detectors.hp, start
+        while (time.monotonic() - calm_since < self.chair_wait_s
+               or time.monotonic() - start < min_wait):
             self.session.tick()
             hp = self.session.detectors.hp
             if hp is not None and last_hp is not None and hp < last_hp - 0.5:

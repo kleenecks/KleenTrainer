@@ -24,9 +24,11 @@ import sys
 import threading
 import time
 import tomllib
+import traceback
 from datetime import datetime
 from pathlib import Path
 
+import cv2
 from pynput import keyboard
 
 import capture
@@ -241,6 +243,7 @@ class Session:
         self.rests = None      # set by the trainer, for the summary
         self.state = "moving" if input_on else "watching"   # for the status line
         self.last_full = 0.0   # when the last full frame was captured
+        self.next_shot = time.monotonic() + config["log"]["screenshot_every_s"]
         self.slow_count = 0    # frames since the bars and death dialog were captured
         self.started = time.perf_counter()
         print(f"Run folder: {self.run_dir}")
@@ -270,6 +273,9 @@ class Session:
         for name in ("save_frame", "mark_safe_spot", "remove_safe_spot"):
             self.requests[name].clear()
 
+        if time.monotonic() >= self.next_shot and window.is_foreground(self.hwnd):
+            self.screenshot("periodic")
+            self.next_shot = time.monotonic() + self.config["log"]["screenshot_every_s"]
         if self.log.status_due():
             self.log.event(self.detectors.status_line(self.state))
         if self.frame is not None:
@@ -378,13 +384,32 @@ class Session:
             raise Stopped("Windows refused to bring the client back to the front")
         self.log.event("Client back in front; continuing.")
 
+    def screenshot(self, why):
+        """Save a full client screenshot in the run folder's screenshots/
+        (every screenshot_every_s while the client is in front, and at every
+        stop). Returns the path, or None if the client cannot be captured."""
+        try:
+            folder = self.run_dir / "screenshots"
+            folder.mkdir(exist_ok=True)
+            # Periodic ones as JPEG (a tenth of a 4 MB PNG; an 8-hour night
+            # is ~100 of them), the stop screenshot as PNG (full detail).
+            ext = "png" if why == "stop" else "jpg"
+            path = folder / f"{datetime.now():%H-%M-%S}_{why}.{ext}"
+            params = [] if ext == "png" else [cv2.IMWRITE_JPEG_QUALITY, 85]
+            cv2.imwrite(str(path), self.capturer.grab(), params)
+            return path
+        except Exception as e:   # e.g. the client window is gone
+            self.log.event(f"Screenshot ({why}) failed: {e}")
+            return None
+
     def close(self, reason):
         if self.keys:
             self.keys.close()
         self.listener.stop()
+        shot = self.screenshot("stop")
         self.capturer.close()
         self.view.close()
-        self.log.event(f"Stop: {reason}.")
+        self.log.event(f"Stop: {reason}." + (f" Screenshot {shot.name}." if shot else ""))
         d = self.detectors
         self.log.event(f"Summary: duration {self.log.duration()}, deaths seen {d.deaths}, "
                        f"unexpected screens {d.unexpected_screens}, "
@@ -409,6 +434,12 @@ def run_session(config, input_on, task):
         reason = "client not in front when a key was due"
     except KeyboardInterrupt:
         reason = "Ctrl+C"
+    except Exception as e:
+        # A bug or something unforeseen: keys are still released below, and
+        # the details go to run.log for the morning review.
+        reason = f"error: {e!r}"
+        session.log.event("Unexpected error:" + chr(10) + traceback.format_exc())
+        raise
     finally:
         session.close(reason)
 

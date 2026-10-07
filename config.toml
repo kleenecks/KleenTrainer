@@ -125,18 +125,24 @@ edge_margin = 20
 [rest]
 # HP % below which the bot goes to rest (stage 10); the loot walk after a
 # kill is skipped below it.
-hp_low_percent = 25
+hp_low_percent = 90
 # HP % that counts as full: the bot gets up (the bar reading can stop a
 # hair short of 100).
-hp_full_percent = 98
+hp_full_percent = 95
 # On the way to rest, jump when a mob is within this many screen px ahead.
 jump_over_px = 60
 # Being hit blocks the chair for a while: sit only once HP has not dropped
 # for this many seconds. If HP is not rising this many seconds after pressing
 # the chair key, press it again. Chairs restore HP in steps, so the check
 # must be longer than one step (a re-press while sitting may stand up).
-chair_wait_s = 3
+chair_wait_s = 1.5
 chair_check_s = 2.5
+# Wait this many seconds after arriving at the safe spot before the first
+# chair press (overlaps chair_wait_s).
+arrive_wait_s = 2
+# After resting, walking off the safe spot must reach the floor within this
+# many seconds; otherwise (or at a wall) the bot turns and tries the other way.
+exit_timeout_s = 4
 
 [attack]
 # Attack when the target's feet are within this many screen px (left or
@@ -230,3 +236,6 @@ merge_distance = 5
 [log]
 # Seconds between status lines in run.log.
 status_interval_s = 60
+# Seconds between client screenshots (run folder, screenshots/); one is also
+# taken at every stop.
+screenshot_every_s = 300
