@@ -12,7 +12,8 @@
           "running": true,
           "lands_y": 128
         }
-      ]
+      ],
+      "exit": "left"
     }
   ]
 }
