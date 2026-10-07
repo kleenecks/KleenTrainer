@@ -7,8 +7,10 @@ differently over different backgrounds), minus light pixels where the dark
 box should be. So a tag partly covered by grass or mobs still scores well
 (it only loses the covered letters), while white areas like clouds score low.
 
-The template is a plain crop of the tag box, top edge at the box's top. Cut
-one per character.
+The letters come from the status bar, which shows the character's name in
+the same letters (name_tag = "auto"; any character, nothing to cut), or
+from a template file: a plain crop of the tag box, top edge at the box's
+top.
 """
 
 import time
@@ -21,6 +23,8 @@ from capture import Region
 
 # The feet are this many pixels above the top of the tag box, at its center.
 TAG_TO_FEET_Y = 5
+# Space between the tag box's edge and its letters (px).
+TAG_PADDING = 5
 # How far the tag is searched for around its last position.
 TRACK_MARGIN = 60
 # A letter pixel counts as found if a light pixel is within 1 px of it.
@@ -41,22 +45,49 @@ class Reading:
     score: float = 0.0
 
 
+def name_from_status_bar(frame, region):
+    """The character's name letters (light pixels) from the status bar,
+    which shows the name in the same letters as the tag above the
+    character, padded like a tag box (TAG_PADDING on each side), or None.
+    region: [x, y, width, height] of the name in the status bar."""
+    x, y, w, h = region
+    light = _light(frame[y:y + h, x:x + w])
+    ys, xs = np.nonzero(light)
+    if len(xs) < 20:
+        return None
+    letters = light[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return cv2.copyMakeBorder(letters, TAG_PADDING, TAG_PADDING, TAG_PADDING, TAG_PADDING,
+                              cv2.BORDER_CONSTANT, value=0)
+
+
 class PlayerLocator:
     def __init__(self, config):
-        tag = cv2.imread(config["name_tag"])
-        letters = _light(tag)
-        self.letters = letters
-        # Box pixels at least 1 px away from any letter: these should be dark.
-        self.box = (cv2.dilate(letters, NEAR) == 0).astype(np.float32)
-        self.letter_count = letters.sum()
+        """config name_tag: "auto" = read the name from the status bar on the
+        first frame (any character, no template to cut), or a template file
+        (a crop of the tag box)."""
+        self.name_region = config["name_region"]
+        self.letters = None
+        if config["name_tag"] != "auto":
+            self._use(_light(cv2.imread(config["name_tag"])))
         self.min_score = config["min_score"]
         self.hold_s = config["lost_hold_s"]
         self.world_bottom = config["world_bottom"]
         self.last_tag = None     # top-left of the tag last time it was found
         self.last_seen = 0.0
 
+    def _use(self, letters):
+        self.letters = letters
+        # Box pixels at least 1 px away from any letter: these should be dark.
+        self.box = (cv2.dilate(letters, NEAR) == 0).astype(np.float32)
+        self.letter_count = letters.sum()
+
     def read(self, frame, now=None):
         now = time.monotonic() if now is None else now
+        if self.letters is None:
+            letters = name_from_status_bar(frame, self.name_region)
+            if letters is None:
+                return Reading("lost")
+            self._use(letters)
         world = frame[:self.world_bottom]
         found = None
         if self.last_tag:

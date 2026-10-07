@@ -18,6 +18,8 @@ capture_fps = 20
 # Live debug overlay: "game" draws directly over the client; "window" shows
 # a scaled copy in a separate window (replay always uses the window).
 overlay = "game"
+# Draw the game overlay's boxes and circles (toggled and saved by the GUI).
+overlay_visible = true
 # Separate overlay window size relative to the client (0.5 = half size).
 overlay_scale = 0.4
 
@@ -34,7 +36,7 @@ strip_margin = 20
 # Each capture call costs ~6 ms on top of its pixels: the HP/MP bars and the
 # death dialog are only captured every this many frames (about twice a
 # second at 10 frames per second).
-slow_every = 5
+slow_every = 3
 
 [minimap]
 # Lowest match score (0 to 1) for the - / + / WORLD buttons to count as found.
@@ -45,8 +47,12 @@ corner_max_rms = 8.0
 dot_min_score = 0.7
 
 [player]
-# Crop of this character's name tag box (cut one per character).
-name_tag = "templates/name_tag.png"
+# "auto": read the character's name from the status bar at the start of each
+# run (same letters as the tag above the character; works for any
+# character). Or a template file: a crop of the name tag box.
+name_tag = "auto"
+# Where the status bar shows the name: [x, y, width, height] (client px).
+name_region = [120, 1124, 200, 24]
 # Lowest tag score (0 to 1) to count as found. Visible tags score 0.96 to
 # 1.0, tags partly covered by mobs about 0.77, other spots at most 0.38.
 min_score = 0.6
@@ -60,6 +66,11 @@ world_bottom = 1050
 # Bars are read along one row: [first x, last x, y] in client pixels.
 hp_bar = [330, 487, 1135]
 mp_bar = [492, 649, 1135]
+# EXP bar, for the EXP gained over a run (green fill vs grey, like HP/MP).
+exp_bar = [661, 834, 1135]
+# The EXP text above it ("200968[70.38%]"): [x0, y0, x1, y1], read for the
+# exact EXP gained.
+exp_text = [698, 1101, 830, 1122]
 # Seconds without a normal minimap before the screen counts as unexpected.
 minimap_missing_s = 3
 # Headline of the death dialog, where it appears (top-left, client pixels),
@@ -146,34 +157,32 @@ exit_timeout_s = 4
 
 [attack]
 # Attack when the target's feet are within this many screen px (left or
-# right) of the character's feet. 90 hit; raised to try further out.
+# right) of the character's feet. 90 hit; 130 in the good rebuild;
+# 160 started swings out of reach.
 range_px = 140
 # Once attacking, keep at it while the target is within the range plus this
-# many px (stops the attack/walk flip-flop at the edge of range).
-hold_margin_px = 10
+# many px (stops the attack/walk flip-flop at the edge of range). 10 made the
+# bot stop and walk after each knockback (hits push a mob back ~40-50 px);
+# 40 keeps swinging through one.
+hold_margin_px = 50
 # While attacking, the target counts as dead after this many seconds unseen
 # (a dying mob vanishes from detection); shorter gaps keep swinging.
 target_lost_s = 0.2
 # A target not seen for this many seconds while walking to it is given up.
 lost_s = 0.5
 # While walking to the target (not yet attacking), a mob at least this many
-# screen px closer takes over and the far target is forgotten (only a mob
-# no healthier than the target).
+# screen px closer takes over and the far target is forgotten.
 retarget_margin_px = 100
-# Target choice: the lowest-HP mob (read from the HP bar shown above hurt
-# mobs) among those at most this many screen px farther than the nearest.
-prefer_hurt_within_px = 300
-# Side choice: each mob weighs (1 + wound_weight * HP lost) / (1 + distance
-# / this), and
-# the bot goes to the side (left/right) whose mobs weigh more. Smaller =
+# Fighting targets the nearest mob (side and HP weighting made it pause
+# among several mobs). These two only pick the side to leave the safe spot
+# toward after resting: each mob weighs (1 + wound_weight * HP lost) /
+# (1 + distance / side_falloff_px), and the heavier side wins. Smaller =
 # closeness matters more; larger = numbers matter more. At 150, one mob
 # 30 px away beats two at 200 and 300 px, and five at 400-800 px beat one
 # 50 px away.
 side_falloff_px = 150
-# How much more a wounded mob counts: a mob weighs 1 + this * its share of
-# HP lost (a nearly dead mob counts 1 + this unhurt ones), and the extra
-# distance allowed for preferring it grows by up to half this times
-# prefer_hurt_within_px. 1 made low-HP mobs lose to others too often.
+# How much more a wounded mob counts (a nearly dead mob counts 1 + this
+# unhurt ones).
 wound_weight = 4
 # Lead the target by this many seconds while walking toward it: the bot acts
 # on slightly old frames, so it starts attacking when the gap expected this
@@ -238,6 +247,10 @@ kill = "end"
 # Marking within this many minimap px of an existing safe spot moves that
 # spot instead of adding a new one.
 merge_distance = 5
+
+[run]
+# Stop the run after this many hours (0 = no limit).
+max_hours = 0
 
 [log]
 # Seconds between status lines in run.log.

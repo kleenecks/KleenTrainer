@@ -36,7 +36,8 @@ detection, looting, HP bar / MP bar / death, logging with screenshots, kill
 hotkey.
 
 Not in v1: map recorder, rope or ladder climbing, multi-platform navigation,
-randomized pathing, GUI, pots, buffs, EXP tracking, anti-detection, stuck
+randomized pathing, GUI (a control window has since been started), pots,
+buffs, EXP tracking, anti-detection, stuck
 detection and recovery (dropped from v1 since it trains one known map).
 
 ## Build order
@@ -120,21 +121,15 @@ All numbers are starting values and live in the config.
   (and off narrow platforms) after landing. Raise it if running jumps fall
   short.
 - Fight and loot loop (trainer.py, rebuilt simply after the rule-on-rule
-  version got erratic): (1) no target and no loot waiting: first the side:
-  each reachable mob weighs (1 + 4 x HP lost) / (1 + distance / 150 px)
-  (config wound_weight, side_falloff_px; a nearly dead mob counts as 5
-  unhurt ones; with 1, low-HP mobs were ignored for others in the game), and the bot goes to the side (left or right)
-  whose mobs weigh more, so a crowd farther away outweighs a single close
-  mob, and a very close mob outweighs a couple of distant ones (one at
-  30 px beats two at 200 and 300 px; five at 400-800 px beat one at 50 px).
-  Then on that side: the lowest-HP mob among those at most 300 screen px
-  (config prefer_hurt_within_px; growing with HP lost, up to 900 px for a
-  nearly dead mob) farther than the nearest there, nearest
-  first among equals (mobs take several hits, so wounded ones get finished
-  off, but not by walking across the map). (2) fight it until it
+  version got erratic): (1) no target and no loot waiting: the nearest
+  reachable mob. (Side weighting by mob count and HP, and preferring the
+  lowest-HP mob, were tried after the rebuild; together with the stricter
+  kill waits below they made the fighting worse, with pauses and no steady
+  attacking among 4-5 mobs, so they were taken out again. side_weight still
+  picks the side to leave the safe spot toward.) (2) fight it until it
   is dead; while still walking to it, a mob 100 screen px (config
-  retarget_margin_px) closer, no healthier and in the direction of travel
-  takes over and the far target is forgotten (e.g. mobs spawning nearer);
+  retarget_margin_px) closer takes over and the far target is forgotten
+  (e.g. mobs spawning nearer);
   once attacking, the target is kept; (3) loot: walk with Z held
   through every spot where a mob died and 40 screen px (config loot
   past_px) beyond the furthest, in the direction of the drops (the way the
@@ -204,20 +199,35 @@ All numbers are starting values and live in the config.
   the warrior's values come later). One target at a time, given by the
   trainer. Out of range: walk toward it. Facing away (the character faces
   the way it last moved): tap the arrow toward it. In range and facing it:
-  hold Ctrl (the game repeats the swing). Range: screen px between the feet
-  (config range_px; 90 hit, 120-150 tried, now 130 set by the user). While
+  hold Ctrl with its key-down re-sent ~30 times a second, like Z (a plain
+  program-held key is not auto-repeated, and gave one swing per press: the
+  bot stood "attacking" without swinging, lost or re-targeted the mob, and
+  pressed again, which looked like attack, move, attack). Range: screen px between the feet
+  (config range_px; 90 hit, 120-150 tried, 130 in the good rebuild; 160
+  started swings out of reach). While
   walking in, the range check can lead the target (config lead_s; frames
   are about 0.2 s old by the time a key takes effect). A 0.2 s lead stopped
   the character walking into approaching mobs but sometimes started swings
   that missed completely; now 0 (no prediction) to compare. Once attacking
-  it keeps at it while the target is within the range plus 10 px (config
-  hold_margin_px), so stopping to swing does not flip it back to walking.
+  it keeps at it while the target is within the range plus 40 px (config
+  hold_margin_px), so stopping to swing does not flip it back to walking,
+  and a hit's knockback (about 40-50 px) does not send it walking after the
+  mob (with 10 px it did, after nearly every hit).
   The target is recognized from frame to frame by its map position, so
   camera movement or a slow frame does not lose it. Dead = seen during the
   attack, then unseen for 0.2 s (config target_lost_s; a dying mob vanishes
-  from detection, so this is also the pause after a kill; if still
-  noticeable, detecting the death animation would make it instant). Not
-  seen for 0.5 s otherwise (config lost_s): given up. Each change of action
+  from detection; "seemingly killed": the bot does not check that the mob
+  really died). A mob walking into the character also vanishes behind its
+  body and swing effects and is taken as killed, which starts a loot walk;
+  accepted. (Tried and dropped: waiting 0.6 s, or 1.5 s at the body, and
+  confirming kills by an EXP text change, which a party's shared EXP would
+  break. Kills are not counted.) Not seen for 0.5 s otherwise (config
+  lost_s): given up.
+  The EXP text is read every 3rd frame (config slow_every); the decision
+  log notes each change. (The EXP bar
+  alone could not tell kills: one bar pixel is ~0.6% of a level and a kill
+  at this level is a few hundredths of a percent; an early "EXP +0.0%" was
+  wrongly read as "no kills".) Each change of action
   can be logged (config debug_log).
 - Frames without the minimap dot or the name tag (briefly covered, e.g. the
   dot under a portal icon): no new fight is started (map positions need the
@@ -314,8 +324,11 @@ All numbers are starting values and live in the config.
   (about 1 s) runs only when that fails, e.g. on a state change.
 - Player on-screen position is separate from minimap position. The camera lags
   and clamps at map edges, so the character is not always at screen center.
-  Found by matching the character's name tag (one template per character,
-  templates/name_tag.png for the test Wizard). Only light grey letter pixels
+  Found by matching the character's name tag. Its letters are read from
+  the status bar at the start of each run (name_tag = "auto"; the status
+  bar shows the name in the same letters: matched 1.00 and reproduced the
+  hand-cut template exactly), so any character works without setup; a
+  template file can still be set instead. Only light grey letter pixels
   are compared, each allowed to be 1 px off (letter edges render slightly
   differently over different backgrounds), so a tag partly covered by grass
   or mobs still matches. The
@@ -373,6 +386,32 @@ All numbers are starting values and live in the config.
   pull focus; the bring-to-front rule applies to saved screenshots.
 
 ## Config and files
+- Control window (gui.py, started first as a post-v1 GUI step): python
+  gui.py from an administrator terminal. Start / Stop runs python main.py
+  train --control as its own process and sends it commands on stdin
+  ("stop", "overlay on", "overlay off"); a stop ends the run like the kill
+  hotkey (logged "stop button"); if the trainer has not stopped 5 s later
+  it is ended by force and the window releases every game key itself. The
+  window shows the run time while running, else the last run's duration
+  and stop reason (from the newest run.log), or that the trainer ended with
+  an error. Overlay checkbox: the overlay's boxes and circles on or off,
+  saved as overlay_visible in config.toml and applied to a running trainer.
+  The window is borderless, always on top, dragged by its title strip,
+  never takes focus when clicked (the trainer would count that as focus
+  lost) and is hidden from screen capture (the trainer would otherwise see
+  it in its frames).
+- Control window, continued: live stats while running (state, HP/MP,
+  rests, EXP gained; from status.json, which the trainer writes in its run
+  folder once a second) and the last run's EXP gained when stopped. A
+  Settings button (only while stopped: it opens a normal window, which needs
+  keyboard focus) with tabs: Keys (click, then press the new key; game keys
+  are stored as pydirectinput names, bot hotkeys as pynput names; a key used
+  twice blocks saving; bot hotkeys on the game's quick-slot keys or letters
+  get a reminder to keep them unbound in the game), Training (rest and
+  get-up HP %, attack range, edge margin), Safe spots (list with route and exit; Remove, Forget route),
+  Character (shows the name read from the status bar), Run (stop after N
+  hours, screenshot interval, decision log). Saving edits config.toml in
+  place through configfile.py, which keeps comments and layout.
 - Entry point: python main.py live | replay FOLDER | walk X | safe. walk and
   safe press game keys (stage 7 tests): walk to minimap x X, or go to the
   closest safe spot. train fights, loots and sweeps until the kill hotkey.
@@ -403,6 +442,27 @@ All numbers are starting values and live in the config.
   unexpected screens, focus losses, frames saved).
 - No per-keypress logging.
 - Log timestamps have milliseconds (to time short pauses).
+- EXP text ("200968[70.38%]" above the EXP bar; status.ExpText, config
+  exp_text): placed from its two green brackets (points' digits end right
+  before the first; the percentage's four digits at fixed offsets back from
+  the second). Digits are read at full resolution against 40 saved samples
+  (templates/digits/, cut from 4 frames with known values) over small
+  sideways shifts, which covers the half-pixel variants the 1.5x stretch
+  produces (shrinking to game resolution was not reliable: 6 vs 8 differ by
+  3 px). Each frame left out was read 40/40 right against the others (same
+  digit <= 2.9, other digits >= 5.6). A read must match every digit clearly
+  and agree with the bar within 2%. It is read at the start and whenever
+  the text area changes (~20-28 ms), from the slow (every 5th frame)
+  region, which now also covers the text.
+- EXP gained: from the EXP text when read (2 decimals and EXP points, e.g.
+  "+0.06% (+170 EXP)"); otherwise from the EXP bar's fill (x 661-834 on row 1135, like
+  HP/MP; within 1% of the game's printed percentage). Gained = end % -
+  start % + 100 per level-up; a level-up = the bar going from above 80% to
+  below 20%. Logged at start and stop (start %, end %, level-ups) so it can
+  be checked against the game's own numbers. A bar reading of pure black
+  (uncaptured area) is unreadable, not empty, for HP/MP/EXP alike.
+- Runs can stop after a set time
+  (config [run] max_hours; 0 = no limit).
 - The log is run.log in the run folder; lines are also printed. In stages 1
   to 6 it records run start, unexpected screens, deaths, safe spot marked,
   the status line every minute (state "watching") and a summary at stop
@@ -443,7 +503,8 @@ All numbers are starting values and live in the config.
 - 2026-10-06: the test server's bot detection started flagging the trainer
   during stage 9 testing. Suspected (not confirmed) signal: very regular
   input timing; the loop runs at a fixed 10 Hz and the held loot key's
-  key-down is re-sent at that steady rate. Anti-detection stays out of v1;
+  key-down is re-sent at that steady rate. Since then the attack key (Ctrl)
+  is re-sent the same way (about 30 per second) while attacking. Anti-detection stays out of v1;
   change input timing only if the admins ask for an evasion test.
 
 ## After v1

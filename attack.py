@@ -2,8 +2,9 @@
 
 The trainer picks the target (a mob's feet on screen) and calls step() every
 frame. Out of range: walk toward it. In range but facing away: tap the arrow
-toward it. In range and facing it: hold the attack key (the game repeats the
-swing). The character faces the way it last moved.
+toward it. In range and facing it: hold the attack key, re-sending its
+key-down like a real held key (keys.hold_repeating), so the game keeps
+swinging. The character faces the way it last moved.
 
 The target is recognized from frame to frame by its map position (minimap x
 when seen, plus its screen offset), so camera movement does not lose it. It
@@ -147,7 +148,9 @@ class Attacker:
             self.facing = toward
             self._note(f"turn {toward}", dx)
         if not self.attacking:
-            self.keys.hold("attack")
+            # Repeating: a key held by a program is not auto-repeated, and
+            # a plain hold gave one swing per press.
+            self.keys.hold_repeating("attack")
             self.attacking = True
             self.attack_started = time.monotonic()
             self.attacks += 1

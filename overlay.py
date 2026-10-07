@@ -23,6 +23,7 @@ WINDOW_NAME = "KleenTrainer overlay"
 class Overlay:
     def __init__(self, scale):
         self.scale = scale
+        self.visible = True   # used by the game overlay only
         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
 
     def show(self, frame, lines, rects=(), points=()):
@@ -93,6 +94,7 @@ class GameOverlay:
                                'overlay = "window" in config.toml.')
         self.geometry = None
         self.closed = False
+        self.visible = True
 
     def show(self, frame, lines, rects=(), points=()):
         """Draw over the client. Same arguments as Overlay.show; frame is
@@ -100,8 +102,9 @@ class GameOverlay:
         c = self.canvas
         c.delete("all")
         # Hiding the window and showing it again could hand it focus, so a
-        # hidden overlay is just an empty (fully see-through) one.
-        if not window.is_foreground(self.hwnd):
+        # hidden overlay is just an empty (fully see-through) one. Also
+        # empty when switched off (visible False, e.g. from the GUI).
+        if not self.visible or not window.is_foreground(self.hwnd):
             return
         area = window.client_area(self.hwnd)
         geometry = f"{area['width']}x{area['height']}+{area['left']}+{area['top']}"

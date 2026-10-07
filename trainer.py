@@ -1,9 +1,8 @@
 """The training loop (resting comes in stage 10).
 
-1. Hunt: no target and no loot waiting: go to the side (left or right) whose
-   mobs weigh more (more mobs, closer, more wounded), then pick the
-   lowest-HP mob there unless it is much farther than the nearest
-   (pick_target).
+1. Hunt: no target and no loot waiting: fight the nearest mob (pick_target).
+   Side and HP weighting made the fighting worse (pauses among several
+   mobs), so it was taken out again.
 2. Fight it until it is dead (attack.py). While still walking to it, a mob
    that is retarget_margin_px closer takes over (e.g. mobs spawning nearer
    than a far target); once attacking, the target is kept.
@@ -45,27 +44,9 @@ def side_weight(mobs, feet, falloff, wound_weight):
                for m in mobs)
 
 
-def pick_target(mobs, feet, prefer_px, falloff, wound_weight):
-    """The mob to fight. First the side: the side (left or right of the
-    character) whose mobs weigh more (side_weight), so a crowd farther away
-    can outweigh a single close mob, a very close mob outweighs a couple of
-    distant ones, and badly wounded mobs pull hard. Then on that side: the
-    lowest-HP mob (mobs.attach_hp; unhurt = 1.0) among those not much
-    farther than the nearest there: prefer_px, growing with the mob's HP
-    lost (up to prefer_px * (1 + wound_weight / 2) for a nearly dead one);
-    nearest first among equals."""
-    def distance(m):
-        return abs(m.feet[0] - feet[0])
-    left = [m for m in mobs if m.feet[0] < feet[0]]
-    right = [m for m in mobs if m.feet[0] >= feet[0]]
-    if left and right:
-        heavier_left = (side_weight(left, feet, falloff, wound_weight)
-                        > side_weight(right, feet, falloff, wound_weight))
-        mobs = left if heavier_left else right
-    nearest = min(distance(m) for m in mobs)
-    candidates = [m for m in mobs
-                  if distance(m) <= nearest + prefer_px * (1 + wound_weight / 2 * (1 - m.hp))]
-    return min(candidates, key=lambda m: (m.hp, distance(m)))
+def pick_target(mobs, feet):
+    """The mob to fight: the nearest one."""
+    return min(mobs, key=lambda m: abs(m.feet[0] - feet[0]))
 
 
 class Trainer:
@@ -80,10 +61,8 @@ class Trainer:
         self.edge_margin = config["sweep"]["edge_margin"]
         self.loot_past_px = config["loot"]["past_px"]
         self.retarget_margin = config["attack"]["retarget_margin_px"]
-        self.prefer_hurt_px = config["attack"]["prefer_hurt_within_px"]
         self.side_falloff = config["attack"]["side_falloff_px"]
         self.wound_weight = config["attack"]["wound_weight"]
-        self.target_hp = 1.0
         self.no_progress_s = config["movement"]["no_progress_s"]
         self.k = config["map"]["screen_px_per_minimap_px"]
         self.hp_low = config["rest"]["hp_low_percent"]
@@ -123,16 +102,9 @@ class Trainer:
         if self.fighting and not self.attacker.attacking and feet and here is not None:
             # Still walking to the target: a mob that spawned (or walked)
             # clearly closer takes over, and the far target is forgotten.
-            # Only for a mob no healthier than the target (a wounded target
-            # is not abandoned for a fresh mob) and in the direction of
-            # travel (no turning back toward a side that was outweighed).
-            target_dx = self.attacker.target - here
-            sign = 1 if target_dx > 0 else -1
+            target_dx = abs(self.attacker.target - here)
             closer = [m for m in mobs
-                      if 0 <= (m.feet[0] - feet[0]) * sign
-                      and abs(m.feet[0] - feet[0]) + self.retarget_margin < abs(target_dx)
-                      and m.hp <= self.target_hp]
-            target_dx = abs(target_dx)
+                      if abs(m.feet[0] - feet[0]) + self.retarget_margin < target_dx]
             if closer:
                 mob = min(closer, key=lambda m: abs(m.feet[0] - feet[0]))
                 self.log.event(f"Closer mob {abs(mob.feet[0] - feet[0])} px away; "
@@ -164,7 +136,7 @@ class Trainer:
                 return
 
         if mobs and feet:
-            self._fight(pick_target(mobs, feet, self.prefer_hurt_px, self.side_falloff, self.wound_weight), feet)
+            self._fight(pick_target(mobs, feet), feet)
             return
         self._sweep()
 
@@ -198,10 +170,6 @@ class Trainer:
     def _fight(self, mob, feet):
         if not self.attacker.set_target(mob, feet):
             return      # no minimap dot this frame: try again next frame
-        self.target_hp = mob.hp
-        if mob.hp < 1:
-            self.log.event(f"Target: {mob.name} at {mob.hp:.0%} HP, "
-                           f"{abs(mob.feet[0] - feet[0])} px away.")
         self.fighting = True
         self._set_state("fighting")
         self.attacker.step()

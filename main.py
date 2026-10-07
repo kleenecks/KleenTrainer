@@ -80,15 +80,14 @@ def player_view(reading):
     return [f"player: {reading.status}{score}, feet ({x}, {y})"], [], [reading.feet]
 
 
-def mob_view(found, feet, prefer_px, falloff, wound_weight):
+def mob_view(found, feet):
     """Overlay text, boxes and points for reachable mobs. The box marks the
-    target the bot would pick (trainer.pick_target: the heavier side, then
-    the lowest HP unless much farther than the nearest)."""
+    target the bot would pick (trainer.pick_target: the nearest)."""
     if feet is None:
         return ["mobs: no player position"], [], []
     if not found:
         return ["mobs: none reachable"], [], []
-    target = trainer.pick_target(found, feet, prefer_px, falloff, wound_weight)
+    target = trainer.pick_target(found, feet)
     tx, ty = target.feet
     box = capture.Region(tx - 30, ty - 60, 60, 64)
     return ([f"mobs: {len(found)} reachable, target {target.name} at ({tx}, {ty}), "
@@ -109,9 +108,8 @@ class Detectors:
         self.mobs = mobs.MobDetector(list(config["mobs"]), config["mob_detection"])
         self.hp_bar = config["status"]["hp_bar"]
         self.mp_bar = config["status"]["mp_bar"]
-        self.prefer_hurt_px = config["attack"]["prefer_hurt_within_px"]
-        self.side_falloff = config["attack"]["side_falloff_px"]
-        self.wound_weight = config["attack"]["wound_weight"]
+        self.exp_bar = config["status"]["exp_bar"]
+        self.exp = None
         self.event = event
         self.safe_spots = list(safe_spots)
         self.was_dead = False
@@ -138,7 +136,7 @@ class Detectors:
         if found:
             mobs.attach_hp(found, frame, me.feet[1])
         for view in (minimap_view(reading, self.safe_spots), player_view(me),
-                     mob_view(found, me.feet, self.prefer_hurt_px, self.side_falloff, self.wound_weight)):
+                     mob_view(found, me.feet)):
             lines += view[0]
             rects += view[1]
             points += view[2]
@@ -148,6 +146,7 @@ class Detectors:
         if self.read_slow:
             self.hp = status.bar_fill(frame, self.hp_bar)
             self.mp = status.bar_fill(frame, self.mp_bar)
+            self.exp = status.bar_fill(frame, self.exp_bar)
         lines.append(bar_text("HP", self.hp) + ", " + bar_text("MP", self.mp))
 
         # The bot only watches in stages 1 to 6, so an unexpected screen is
@@ -213,8 +212,9 @@ class Session:
         # Hotkeys are heard by a background listener; tick() acts on them.
         hotkeys = config["hotkeys"]
         self.requests = {name: threading.Event()
-                         for name in ("save_frame", "mark_safe_spot", "remove_safe_spot", "kill")}
-        by_key = {parse_key(hotkeys[name]): name for name in self.requests}
+                         for name in ("save_frame", "mark_safe_spot", "remove_safe_spot",
+                                      "kill", "stop_button")}
+        by_key = {parse_key(hotkeys[name]): name for name in self.requests if name in hotkeys}
 
         def on_press(key):
             if key in by_key:
@@ -231,8 +231,12 @@ class Session:
             self.view = overlay.GameOverlay(self.hwnd)
         else:
             self.view = overlay.Overlay(config["overlay_scale"])
+        self.view.visible = config["overlay_visible"]
         # Opening the overlay window can take focus from the client.
         window.bring_to_front(self.hwnd, config["focus_settle_s"])
+        if config.get("_control"):
+            # Started by the GUI: commands arrive on stdin, one per line.
+            threading.Thread(target=self._read_control, daemon=True).start()
 
         self.interval = 1 / config["capture_fps"]
         self.frame = None
@@ -242,6 +246,11 @@ class Session:
         self.reopen_tried = False
         self.attacker = None   # set by tasks that fight, for the summary
         self.rests = None      # set by the trainer, for the summary
+        self.exp_tracker = status.ExpTracker()
+        self.exp_text = status.ExpText(config["status"])
+        self.exp_text_read = False   # read once at the start, then on changes
+        self.run_start = time.monotonic()
+        self.next_status_file = 0.0
         self.state = "moving" if input_on else "watching"   # for the status line
         self.last_full = 0.0   # when the last full frame was captured
         self.next_shot = time.monotonic() + config["log"]["screenshot_every_s"]
@@ -254,6 +263,11 @@ class Session:
         """One loop step; returns the latest minimap reading (or None)."""
         if self.requests["kill"].is_set():
             raise Stopped("kill hotkey")
+        if self.requests["stop_button"].is_set():
+            raise Stopped("stop button")
+        max_hours = self.config["run"]["max_hours"]
+        if max_hours and time.monotonic() - self.run_start >= max_hours * 3600:
+            raise Stopped(f"time limit ({max_hours} h)")
         if not window.find_window(self.config["window_title"]):
             raise Stopped("client window closed")
 
@@ -277,6 +291,20 @@ class Session:
         if time.monotonic() >= self.next_shot and window.is_foreground(self.hwnd):
             self.screenshot("periodic")
             self.next_shot = time.monotonic() + self.config["log"]["screenshot_every_s"]
+        if self.detectors.read_slow and self.frame is not None:
+            self.exp_tracker.update(self.detectors.exp, self.log.event)
+            now = time.monotonic()
+            self.exp_text.watch(self.frame, now)
+            if not self.exp_text_read or self.exp_text.changed_at == now:
+                before = self.exp_tracker.text_last
+                self._read_exp_text()
+                after = self.exp_tracker.text_last
+                if (self.config["attack"]["debug_log"] and before and after
+                        and after != before):
+                    self.log.event(f"EXP {after[0] - before[0]:+,} ({after[1]:.2f}%).")
+        if time.monotonic() >= self.next_status_file:
+            self._write_status_file()
+            self.next_status_file = time.monotonic() + 1
         if self.log.status_due():
             self.log.event(self.detectors.status_line(self.state))
         if self.frame is not None:
@@ -288,6 +316,44 @@ class Session:
             raise Stopped("overlay closed")
         self.started = time.perf_counter()
         return self.detectors.reading
+
+    def _read_exp_text(self):
+        """Read the EXP text; keep it only if it agrees with the bar (a
+        misread could otherwise distort EXP gained)."""
+        reading = self.exp_text.read(self.frame)
+        bar = self.detectors.exp
+        if reading and (bar is None or abs(reading[1] - bar) <= 2):
+            if not self.exp_text_read:
+                self.log.event(f"EXP text at start: {reading[0]} [{reading[1]:.2f}%].")
+            self.exp_text_read = True
+            self.exp_tracker.update_text(reading)
+
+    def _write_status_file(self):
+        """status.json in the run folder, once a second, for the GUI's live
+        stats. Written to a temporary file first so it is never read half
+        written."""
+        d = self.detectors
+        status = {"state": self.state, "hp": d.hp, "mp": d.mp,
+                  "rests": self.rests or 0,
+                  "attacks": self.attacker.attacks if self.attacker else 0,
+                  "exp_gained": self.exp_tracker.gained(),
+                  "seconds": int(time.monotonic() - self.run_start)}
+        tmp = self.run_dir / "status.json.tmp"
+        try:
+            tmp.write_text(json.dumps(status), encoding="utf-8")
+            tmp.replace(self.run_dir / "status.json")
+        except OSError:
+            pass   # e.g. the GUI is reading it right now; next second
+
+    def _read_control(self):
+        """Commands from the GUI (gui.py) on stdin: "stop", "overlay on",
+        "overlay off"."""
+        for line in sys.stdin:
+            command = line.strip()
+            if command == "stop":
+                self.requests["stop_button"].set()
+            elif command in ("overlay on", "overlay off"):
+                self.view.visible = command == "overlay on"
 
     def _grab(self):
         """Capture what the detectors need. Usually only regions: a strip
@@ -328,7 +394,12 @@ class Session:
         self.detectors.read_slow = self.slow_count == 0
         if self.detectors.read_slow:
             hp, mp = d.hp_bar, d.mp_bar
-            regions += [capture.Region(hp[0] - 5, hp[2] - 5, mp[1] - hp[0] + 10, 11),
+            # One region for the HP/MP/EXP bars and the EXP text above them.
+            ex0, ey0, ex1, ey1 = self.config["status"]["exp_text"]
+            exp = d.exp_bar
+            top = min(hp[2] - 5, ey0)
+            regions += [capture.Region(hp[0] - 5, top, max(exp[1], ex1) - hp[0] + 10,
+                                       hp[2] + 6 - top),
                         d.death.area]
         return self.capturer.grab_regions(regions)
 
@@ -411,6 +482,7 @@ class Session:
         self.capturer.close()
         self.view.close()
         self.log.event(f"Stop: {reason}." + (f" Screenshot {shot.name}." if shot else ""))
+        self.log.event(self.exp_tracker.summary())
         d = self.detectors
         self.log.event(f"Summary: duration {self.log.duration()}, deaths seen {d.deaths}, "
                        f"unexpected screens {d.unexpected_screens}, "
@@ -557,6 +629,9 @@ def replay(config, folder):
 
 def main():
     args = sys.argv[1:]
+    # --control: started by the GUI, which sends commands on stdin.
+    control = "--control" in args
+    args = [a for a in args if a != "--control"]
     # Commands and how many arguments they take before the optional config.
     commands = {"live": 0, "replay": 1, "walk": 1, "safe": 0, "train": 0}
     if not args or args[0] not in commands or len(args) < 1 + commands[args[0]]:
@@ -564,6 +639,7 @@ def main():
     command, rest = args[0], args[1:]
     n = commands[command]
     config = load_config(rest[n] if len(rest) > n else "config.toml")
+    config["_control"] = control
     if command == "live":
         live(config)
     elif command == "replay":

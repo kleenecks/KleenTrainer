@@ -7,7 +7,7 @@
       ],
       "route": [
         {
-          "takeoff_x": 46,
+          "takeoff_x": 43,
           "direction": "left",
           "running": true,
           "lands_y": 128
